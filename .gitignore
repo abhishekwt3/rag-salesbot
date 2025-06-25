@@ -12,6 +12,21 @@ dist/
 *.egg-link
 sdist/
 
+node_modules/
+
+# build outputs
+dist/
+build/
+.next/ # Next.js build output
+.nuxt/ # Nuxt.js build output
+out/ # Common output directory
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
 # Virtual environments
 .venv/
 env/
@@ -43,20 +58,20 @@ __pycache__/
 
 # Node.js
 # node_modules
-node_modules/
+frontend/node_modules/
 
 # build outputs
-dist/
-build/
-.next/ # Next.js build output
-.nuxt/ # Nuxt.js build output
-out/ # Common output directory
+frontend/dist/
+frontend/build/
+frontend/.next/ # Next.js build output
+frontend/.nuxt/ # Nuxt.js build output
+frontend/out/ # Common output directory
 
 # Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/lerna-debug.log*
 
 # Environment variables
 .env
