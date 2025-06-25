@@ -1,0 +1,97 @@
+# Python
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.Python
+build/
+dist/
+*.egg
+*.egg-link
+sdist/
+
+# Virtual environments
+.venv/
+env/
+venv/
+venv.bak/
+virtualenv/
+.virtual_env/
+.virtualenv/
+.env/
+
+# Distribution / packaging
+.Python/
+cover/
+develop-eggs/
+pip-wheel-metadata/
+local_lib/
+lib64/
+__pycache__/
+*.so
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# MyPy
+.mypy_cache/
+
+# Pytest
+.pytest_cache/
+
+# Node.js
+# node_modules
+node_modules/
+
+# build outputs
+dist/
+build/
+.next/ # Next.js build output
+.nuxt/ # Nuxt.js build output
+out/ # Common output directory
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# npm package manager cache
+.npm/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# VSCode
+.vscode/
+
+# IDEs
+.idea/ # IntelliJ IDEA
+*.iml # IntelliJ IDEA module files
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Editor specific
+*~
+*.swp
+.Trash-*
