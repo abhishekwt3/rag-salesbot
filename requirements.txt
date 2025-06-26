@@ -10,3 +10,22 @@ python-dotenv==1.0.0
 pydantic==2.5.0
 httpx==0.28.1
 python-multipart==0.0.6
+
+# requirements.txt - Updated for Fast Semantic Search
+# fastapi==0.104.1
+# uvicorn==0.24.0
+# playwright==1.40.0
+# beautifulsoup4==4.12.2
+# pydantic==2.5.0
+# httpx==0.28.1
+# python-multipart==0.0.6
+python-dotenv==1.0.0
+
+# NEW: Fast Semantic Search Dependencies
+sentence-transformers==4.1.0
+faiss-cpu==1.11.0
+numpy==2.3.1
+torch==2.7.1
+
+# Optional: For even faster CPU inference
+# onnxruntime==1.16.0  # Uncomment for ONNX optimization
