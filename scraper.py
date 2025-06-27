@@ -12,7 +12,7 @@ from typing import List
 # Proper Playwright imports
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from bs4 import BeautifulSoup
-import httpxc
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class AdvancedPlaywrightScraper:
     def __init__(self):
         self.playwright = None
         self.browser = None
-        self.context = None
+        self.context = None   
         
     async def scrape_website(self, base_url: str, max_pages: int = 50, 
                            include_patterns: List[str] = None, 
@@ -222,14 +222,13 @@ class AdvancedPlaywrightScraper:
             raise
     
     async def _scrape_page_with_js(self, url: str) -> Optional[Dict]:
-        """Scrape page with comprehensive JavaScript handling"""
         page = None
         try:
             # Create new page
             page = await self.context.new_page()
             
-            # Set comprehensive timeouts
-            page.set_default_timeout(60000)  # 60 seconds
+            # UPDATED: Longer timeouts for SPAs
+            page.set_default_timeout(90000)  # 90 seconds for SPAs
             page.set_default_navigation_timeout(60000)
             
             logger.info(f"   🌐 Loading page with JavaScript rendering...")
@@ -269,34 +268,104 @@ class AdvancedPlaywrightScraper:
                     else:
                         raise nav_error
             
-            # CRITICAL: Wait for JavaScript content to load
+            # UPDATED: Enhanced waiting strategies for React/Next.js
             logger.info("   ⏳ Waiting for JavaScript content to render...")
             
-            # Multiple wait strategies for JavaScript content
-            try:
-                # Strategy 1: Wait for common content indicators
-                await page.wait_for_function(
-                    "document.readyState === 'complete'",
-                    timeout=20000
-                )
-                logger.info("   ✅ Document ready state complete")
-                
-                # Strategy 2: Wait for body to have content
-                await page.wait_for_function(
-                    "document.body && document.body.innerText.length > 100",
-                    timeout=30000
-                )
-                logger.info("   ✅ Body content detected")
-                
-            except Exception as wait_error:
-                logger.warning(f"   ⚠️  Wait strategy failed: {wait_error}")
-                # Continue anyway - content might still be there
+            # Check if it's a SPA
+            is_spa = await page.evaluate("""
+                () => {
+                    const html = document.documentElement.innerHTML;
+                    return html.includes('id="__next"') || 
+                        html.includes('id="root"') || 
+                        html.includes('react') ||
+                        html.includes('next.js');
+                }
+            """)
             
-            # Additional wait for slow-loading content
-            logger.info("   ⏳ Additional wait for dynamic content...")
-            await asyncio.sleep(5)
+            if is_spa:
+                logger.info("   🎭 Detected React/Next.js SPA - using enhanced waiting...")
+                
+                # Strategy 1: Wait for React to mount
+                try:
+                    await page.wait_for_function(
+                        """
+                        () => {
+                            const nextDiv = document.getElementById('__next') || document.getElementById('root');
+                            return nextDiv && nextDiv.children.length > 0;
+                        }
+                        """,
+                        timeout=30000
+                    )
+                    logger.info("   ✅ React app mounted successfully")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  React mount detection failed: {e}")
+                
+                # Strategy 2: Wait for content to appear
+                try:
+                    await page.wait_for_function(
+                        """
+                        () => {
+                            const container = document.getElementById('__next') || 
+                                            document.getElementById('root') || 
+                                            document.body;
+                            const textContent = container.innerText || '';
+                            return textContent.length > 200;
+                        }
+                        """,
+                        timeout=45000
+                    )
+                    logger.info("   ✅ Content detected in SPA container")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  SPA content detection failed: {e}")
+                
+                # Strategy 3: Wait for loading indicators to disappear
+                try:
+                    await page.wait_for_function(
+                        """
+                        () => {
+                            const loadingElements = document.querySelectorAll(
+                                '[class*="loading"], [class*="spinner"], [aria-label*="loading"], .loader'
+                            );
+                            const visibleLoaders = Array.from(loadingElements).filter(el => 
+                                el.offsetWidth > 0 && el.offsetHeight > 0
+                            );
+                            return visibleLoaders.length === 0;
+                        }
+                        """,
+                        timeout=30000
+                    )
+                    logger.info("   ✅ Loading indicators cleared")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Loading indicator check failed: {e}")
+                
+                # Additional wait for SPA
+                await asyncio.sleep(5)
+                
+            else:
+                # Regular JavaScript site handling
+                logger.info("   ⚡ Regular JavaScript site - using standard waiting...")
+                
+                # Your existing wait strategies
+                try:
+                    await page.wait_for_function(
+                        "document.readyState === 'complete'",
+                        timeout=20000
+                    )
+                    logger.info("   ✅ Document ready state complete")
+                    
+                    await page.wait_for_function(
+                        "document.body && document.body.innerText.length > 100",
+                        timeout=30000
+                    )
+                    logger.info("   ✅ Body content detected")
+                    
+                except Exception as wait_error:
+                    logger.warning(f"   ⚠️  Wait strategy failed: {wait_error}")
+                
+                # Your existing additional wait
+                await asyncio.sleep(5)
             
-            # Try to trigger any lazy loading by scrolling
+            # Try to trigger any lazy loading by scrolling (your existing code)
             try:
                 await page.evaluate("""
                     window.scrollTo(0, document.body.scrollHeight / 4);
@@ -309,122 +378,23 @@ class AdvancedPlaywrightScraper:
             except Exception as scroll_error:
                 logger.debug(f"   Scrolling failed: {scroll_error}")
             
-            # Extract content using multiple methods
+            # UPDATED: Enhanced content extraction
             logger.info("   📄 Extracting JavaScript-rendered content...")
             
             # Get page title
             title = await page.title()
             logger.info(f"   📄 Page title: '{title}'")
             
-            # Method 1: Try to get text from main content areas
-            content = ""
-            content_selectors = [
-                'main',
-                'article',
-                '[role="main"]',
-                '.content',
-                '.main-content',
-                '#content',
-                '#main',
-                '.container'
-            ]
+            # UPDATED: Use enhanced extraction method
+            if is_spa:
+                content = await self._extract_spa_content(page)
+                links = await self._extract_spa_links(page)
+            else:
+                # Your existing content extraction
+                content = await self._extract_regular_content(page)
+                links = await self._extract_regular_links(page)
             
-            for selector in content_selectors:
-                try:
-                    elements = await page.query_selector_all(selector)
-                    if elements:
-                        for element in elements:
-                            text = await element.inner_text()
-                            if text and len(text) > len(content):
-                                content = text
-                                logger.info(f"   📄 Content from {selector}: {len(text)} chars")
-                        if len(content) > 500:
-                            break
-                except Exception as e:
-                    logger.debug(f"   Selector {selector} failed: {e}")
-            
-            # Method 2: Fallback to body text
-            if len(content) < 200:
-                try:
-                    logger.info("   📄 Trying body text extraction...")
-                    content = await page.evaluate("""
-                        () => {
-                            const body = document.body;
-                            if (!body) return '';
-                            
-                            // Remove script and style content
-                            const scripts = body.querySelectorAll('script, style, noscript');
-                            scripts.forEach(el => el.remove());
-                            
-                            return body.innerText || body.textContent || '';
-                        }
-                    """)
-                    logger.info(f"   📄 Body text: {len(content)} chars")
-                except Exception as e:
-                    logger.warning(f"   ⚠️  Body text extraction failed: {e}")
-            
-            # Method 3: Last resort - get all visible text
-            if len(content) < 100:
-                try:
-                    logger.info("   📄 Trying comprehensive text extraction...")
-                    content = await page.evaluate("""
-                        () => {
-                            // Get all text nodes
-                            const walker = document.createTreeWalker(
-                                document.body,
-                                NodeFilter.SHOW_TEXT,
-                                {
-                                    acceptNode: function(node) {
-                                        // Skip hidden elements
-                                        const parent = node.parentElement;
-                                        if (!parent) return NodeFilter.FILTER_REJECT;
-                                        
-                                        const style = window.getComputedStyle(parent);
-                                        if (style.display === 'none' || 
-                                            style.visibility === 'hidden' ||
-                                            style.opacity === '0') {
-                                            return NodeFilter.FILTER_REJECT;
-                                        }
-                                        
-                                        return NodeFilter.FILTER_ACCEPT;
-                                    }
-                                }
-                            );
-                            
-                            let text = '';
-                            let node;
-                            while (node = walker.nextNode()) {
-                                const nodeText = node.textContent.trim();
-                                if (nodeText.length > 3) {
-                                    text += nodeText + ' ';
-                                }
-                            }
-                            
-                            return text.trim();
-                        }
-                    """)
-                    logger.info(f"   📄 Comprehensive text: {len(content)} chars")
-                except Exception as e:
-                    logger.warning(f"   ⚠️  Comprehensive extraction failed: {e}")
-            
-            # Get all links
-            links = []
-            try:
-                links_data = await page.evaluate("""
-                    () => {
-                        const links = Array.from(document.querySelectorAll('a[href]'));
-                        return links.map(link => ({
-                            href: link.href,
-                            text: link.textContent.trim()
-                        }));
-                    }
-                """)
-                links = links_data or []
-                logger.info(f"   🔗 Extracted {len(links)} links")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Link extraction failed: {e}")
-            
-            # Clean and validate content
+            # Clean and validate content (your existing code)
             if content:
                 content = self._clean_content(content)
             
@@ -437,34 +407,22 @@ class AdvancedPlaywrightScraper:
             if not content or len(content) < 50:
                 logger.warning(f"   ⚠️  Insufficient content after JavaScript rendering: {len(content)} chars")
                 
-                # Debug: Take screenshot for inspection
-                try:
-                    screenshot_path = f"debug_screenshot_{int(time.time())}.png"
-                    await page.screenshot(path=screenshot_path)
-                    logger.info(f"   📷 Debug screenshot saved: {screenshot_path}")
-                except Exception as screenshot_error:
-                    logger.debug(f"   Screenshot failed: {screenshot_error}")
-                
-                # Show what's actually on the page
-                try:
-                    page_html = await page.content()
-                    logger.info(f"   🔍 Page HTML length: {len(page_html)}")
-                    
-                    # Check for common JavaScript frameworks
-                    html_lower = page_html.lower()
-                    frameworks = {
-                        'React': 'react' in html_lower,
-                        'Vue': 'vue' in html_lower,
-                        'Angular': 'angular' in html_lower,
-                        'jQuery': 'jquery' in html_lower
-                    }
-                    
-                    detected = [name for name, found in frameworks.items() if found]
-                    if detected:
-                        logger.info(f"   🔍 Detected frameworks: {', '.join(detected)}")
-                    
-                except Exception as debug_error:
-                    logger.debug(f"   Debug inspection failed: {debug_error}")
+                # Enhanced debugging for SPAs
+                if is_spa:
+                    spa_debug = await page.evaluate("""
+                        () => {
+                            const container = document.getElementById('__next') || 
+                                            document.getElementById('root');
+                            return {
+                                containerExists: !!container,
+                                containerChildren: container ? container.children.length : 0,
+                                containerText: container ? container.innerText.substring(0, 300) : '',
+                                bodyText: document.body.innerText.substring(0, 300),
+                                hasNextData: !!window.__NEXT_DATA__
+                            };
+                        }
+                    """)
+                    logger.info(f"   🔍 SPA Debug: {spa_debug}")
                 
                 if len(content) < 50:
                     return None
@@ -476,8 +434,9 @@ class AdvancedPlaywrightScraper:
                 'content': content,
                 'links': links,
                 'scraped_at': time.time(),
-                'method': 'playwright_javascript',
-                'word_count': len(content.split()) if content else 0
+                'method': 'playwright_enhanced_spa' if is_spa else 'playwright_javascript',
+                'word_count': len(content.split()) if content else 0,
+                'is_spa': is_spa
             }
             
         except Exception as e:
@@ -585,20 +544,150 @@ class AdvancedPlaywrightScraper:
                 continue
         
         return valid_urls
-    
-    async def _cleanup(self):
-        """Enhanced cleanup"""
+
+    async def _extract_spa_content(self, page) -> str:
+        """Extract content from React/Next.js SPAs"""
         try:
-            if self.context:
-                await self.context.close()
-            if self.browser:
-                await self.browser.close()
-            if self.playwright:
-                await self.playwright.stop()
+            content = await page.evaluate("""
+                () => {
+                    // Try React/Next.js container first
+                    const containers = [
+                        document.getElementById('__next'),
+                        document.getElementById('root'),
+                        document.querySelector('[data-reactroot]')
+                    ].filter(Boolean);
+
+                    for (const container of containers) {
+                        if (container) {
+                            const clone = container.cloneNode(true);
+                            // Remove scripts, styles, nav elements
+                            const unwanted = clone.querySelectorAll(
+                                'script, style, noscript, nav, header, footer, [class*="nav"], [class*="menu"]'
+                            );
+                            unwanted.forEach(el => el.remove());
+
+                            const text = clone.innerText || clone.textContent || '';
+                            if (text.length > 200) {
+                                return text;
+                            }
+                        }
+                    }
+
+                    // Fallback to main content areas
+                    const selectors = ['main', 'article', '.content', '.main-content', 'section'];
+                    for (const selector of selectors) {
+                        const elements = document.querySelectorAll(selector);
+                        for (const element of elements) {
+                            const text = element.innerText || element.textContent || '';
+                            if (text.length > 200) {
+                                return text;
+                            }
+                        }
+                    }
+
+                    // Last resort: all body text
+                    return document.body.innerText || document.body.textContent || '';
+                }
+            """)
+
+            return content or ""
         except Exception as e:
-            logger.warning(f"Cleanup warning: {e}")
+            logger.error(f"SPA content extraction error: {e}")
+            return ""
+
+    async def _extract_spa_links(self, page) -> list:
+        """Extract links from React/Next.js SPAs"""
+        try:
+            links = await page.evaluate("""
+                () => {
+                    const linkElements = document.querySelectorAll('a[href], [role="link"]');
+                    const links = [];
+
+                    linkElements.forEach(link => {
+                        let href = link.href || link.getAttribute('href') || '';
+                        const text = (link.innerText || link.textContent || '').trim();
+
+                        // Handle Next.js Link components and relative URLs
+                        if (href.startsWith('/')) {
+                            href = window.location.origin + href;
+                        }
+
+                        if (href && text && !href.includes('javascript:')) {
+                            links.push({
+                                href: href,
+                                text: text
+                            });
+                        }
+                    });
+
+                    return links;
+                }
+            """)
+
+            return links or []
+        except Exception as e:
+            logger.warning(f"SPA link extraction error: {e}")
+            return []
+
+    async def _extract_regular_content(self, page) -> str:
+        """Your existing content extraction for regular sites"""
+        content = ""
+        content_selectors = [
+            'main', 'article', '[role="main"]',
+            '.content', '.main-content', '#content', '#main', '.container'
+        ]
+
+        for selector in content_selectors:
+            try:
+                elements = await page.query_selector_all(selector)
+                if elements:
+                    for element in elements:
+                        text = await element.inner_text()
+                        if text and len(text) > len(content):
+                            content = text
+                            logger.info(f"   📄 Content from {selector}: {len(text)} chars")
+                    if len(content) > 500:
+                        break
+            except Exception as e:
+                logger.debug(f"   Selector {selector} failed: {e}")
+
+        # Your existing fallback methods...
+        if len(content) < 200:
+            try:
+                content = await page.evaluate("""
+                    () => {
+                        const body = document.body;
+                        if (!body) return '';
+
+                        const scripts = body.querySelectorAll('script, style, noscript');
+                        scripts.forEach(el => el.remove());
+
+                        return body.innerText || body.textContent || '';
+                    }
+                """)
+            except Exception as e:
+                logger.warning(f"Body text extraction failed: {e}")
+
+        return content
+
+    async def _extract_regular_links(self, page) -> list:
+        """Your existing link extraction"""
+        try:
+            links_data = await page.evaluate("""
+                () => {
+                    const links = Array.from(document.querySelectorAll('a[href]'));
+                    return links.map(link => ({
+                        href: link.href,
+                        text: link.textContent.trim()
+                    }));
+                }
+            """)
+            return links_data or []
+        except Exception as e:
+            logger.warning(f"Link extraction failed: {e}")
+            return []
         
-        logger.info("🧹 Advanced browser cleanup completed")
+    
     
 
 
@@ -636,3 +725,4 @@ class WebScraper:
         # If we get here, Playwright failed - you can add HTTP fallback here if needed
         logger.info("💡 For JavaScript-heavy sites, manual content addition is recommended")
         return []
+    
