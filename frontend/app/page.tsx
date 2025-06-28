@@ -1,467 +1,331 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
+import { Button } from "@/app/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/app/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs"
+import { Input } from "@/app/components/ui/input"
+import { Label } from "@/app/components/ui/label"
+import { Alert, AlertDescription } from "@/app/components/ui/alert"
+import { Badge } from "@/app/components/ui/badge"
+import { Separator } from "@/app/components/ui/separator"
+import { Avatar, AvatarFallback, AvatarInitials } from "@/app/components/ui/avatar"
+import AuthModal from '@/app/components/AuthModal'
+import KnowledgeBaseManager from '@/app/components/KnowledgeBaseManager'
+import ChatInterface from '@/app/components/ChatInterface'
+import { Bot, Database, Users, Zap, ArrowRight, Shield, Globe, MessageCircle } from 'lucide-react'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
-// Icons (keeping your existing ones)
-const SendIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-  </svg>
-)
-
-const GlobeIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-  </svg>
-)
-
-// NEW: Single page icon
-const DocumentIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-  </svg>
-)
-
-const SettingsIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-  </svg>
-)
-
-const CheckIcon = () => (
-  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-  </svg>
-)
-
-const AlertIcon = () => (
-  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-  </svg>
-)
-
-interface Message {
-  id: number
-  text: string
-  isBot: boolean
-  timestamp: Date
-  confidence?: number
-  sources?: Array<{
-    url: string
-    title: string
-    relevance_score?: number
-  }>
+interface User {
+  id: string
+  email: string
+  full_name: string
+  created_at: string
 }
 
-interface SystemStatus {
-  status: 'ready' | 'not_ready' | 'error'
+interface KnowledgeBase {
+  id: string
+  name: string
+  description?: string
+  status: 'not_ready' | 'processing' | 'ready' | 'error'
   total_chunks: number
   last_updated?: string
+  created_at: string
 }
 
-export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      text: "Hello! I'm your AI assistant. I can answer questions about your website content. First, let me know your website URL to get started.",
-      isBot: true,
-      timestamp: new Date()
+export default function SaaSChatbotApp() {
+  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
+  const [selectedKB, setSelectedKB] = useState<string | null>(null)
+  const [showAuthModal, setShowAuthModal] = useState(false)
+
+  // Check for existing token on mount
+  useEffect(() => {
+    const savedToken = localStorage.getItem('token')
+    if (savedToken) {
+      setToken(savedToken)
+      fetchUserInfo(savedToken)
+    } else {
+      setLoading(false)
     }
-  ])
-  const [inputText, setInputText] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
-  const [showSetup, setShowSetup] = useState(false)
-  const [websiteUrl, setWebsiteUrl] = useState('')
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  // Check system status on load
-  useEffect(() => {
-    checkSystemStatus()
   }, [])
 
-  const checkSystemStatus = async () => {
+  // Fetch user info and knowledge bases
+  useEffect(() => {
+    if (token && user) {
+      fetchKnowledgeBases()
+    }
+  }, [token, user])
+
+  const fetchUserInfo = async (authToken: string) => {
     try {
-      const response = await fetch(`${API_BASE}/status`)
-      const status = await response.json()
-      setSystemStatus(status)
-    } catch (error) {
-      console.error('Error checking status:', error)
-      setSystemStatus({ status: 'error', total_chunks: 0 })
-    }
-  }
-
-  // EXISTING: Multi-page setup function
-  const handleSetupWebsite = async () => {
-    if (!websiteUrl.trim()) return
-
-    setIsLoading(true)
-    const setupMessage: Message = {
-      id: Date.now(),
-      text: `Setting up website (multi-page crawling): ${websiteUrl}`,
-      isBot: false,
-      timestamp: new Date()
-    }
-    setMessages(prev => [...prev, setupMessage])
-
-    try {
-      const response = await fetch(`${API_BASE}/setup-website`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: websiteUrl,
-          max_pages: 50,
-          exclude_patterns: ['/blog', '/news'],
-          single_page_mode: false  // Multi-page mode
-        })
-      })
-
-      if (response.ok) {
-        setMessages(prev => [...prev, {
-          id: Date.now() + 1,
-          text: "Great! I'm now crawling your website and processing multiple pages. This may take a few minutes. You can start asking questions once I'm ready!",
-          isBot: true,
-          timestamp: new Date()
-        }])
-        setShowSetup(false)
-        setWebsiteUrl('')
-        
-        // Poll for status updates
-        const pollInterval = setInterval(async () => {
-          await checkSystemStatus()
-          try {
-            const currentStatus = await fetch(`${API_BASE}/status`).then(r => r.json())
-            if (currentStatus.status === 'ready') {
-              clearInterval(pollInterval)
-              setMessages(prev => [...prev, {
-                id: Date.now() + 2,
-                text: `Perfect! I've processed ${currentStatus.total_chunks} pieces of content from your website. I'm ready to answer your questions!`,
-                isBot: true,
-                timestamp: new Date()
-              }])
-            }
-          } catch (err) {
-            console.error('Status check error:', err)
-          }
-        }, 5000)
-      } else {
-        throw new Error('Setup failed')
-      }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
-      setMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        text: "Sorry, there was an error setting up your website. Please check the URL and try again.",
-        isBot: true,
-        timestamp: new Date()
-      }])
-    }
-    setIsLoading(false)
-  }
-
-  // NEW: Single page setup function
-  const handleSinglePageSetup = async () => {
-    if (!websiteUrl.trim()) return
-
-    setIsLoading(true)
-    const setupMessage: Message = {
-      id: Date.now(),
-      text: `Setting up single page only: ${websiteUrl}`,
-      isBot: false,
-      timestamp: new Date()
-    }
-    setMessages(prev => [...prev, setupMessage])
-
-    try {
-      const response = await fetch(`${API_BASE}/scrape-single-page`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: websiteUrl
-        })
-      })
-
-      if (response.ok) {
-        setMessages(prev => [...prev, {
-          id: Date.now() + 1,
-          text: "Perfect! I'm now processing just this single page. This should be much faster - usually takes 30-60 seconds!",
-          isBot: true,
-          timestamp: new Date()
-        }])
-        setShowSetup(false)
-        setWebsiteUrl('')
-        
-        // Poll for status updates (shorter intervals for single page)
-        const pollInterval = setInterval(async () => {
-          await checkSystemStatus()
-          try {
-            const currentStatus = await fetch(`${API_BASE}/status`).then(r => r.json())
-            if (currentStatus.status === 'ready') {
-              clearInterval(pollInterval)
-              setMessages(prev => [...prev, {
-                id: Date.now() + 2,
-                text: `Excellent! I've processed the single page and extracted ${currentStatus.total_chunks} content chunks. I'm ready to answer questions about this page!`,
-                isBot: true,
-                timestamp: new Date()
-              }])
-            }
-          } catch (err) {
-            console.error('Status check error:', err)
-          }
-        }, 3000)  // Check every 3 seconds for single page (faster)
-      } else {
-        throw new Error('Single page setup failed')
-      }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
-      setMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        text: "Sorry, there was an error processing the single page. Please check the URL and try again.",
-        isBot: true,
-        timestamp: new Date()
-      }])
-    }
-    setIsLoading(false)
-  }
-
-  const handleSendMessage = async () => {
-    if (!inputText.trim() || isLoading) return
-
-    // Check if it's a URL (simple setup)
-    if (inputText.includes('http') && systemStatus?.status !== 'ready') {
-      setWebsiteUrl(inputText.trim())
-      setInputText('')
-      await handleSetupWebsite()
-      return
-    }
-
-    const userMessage: Message = {
-      id: Date.now(),
-      text: inputText.trim(),
-      isBot: false,
-      timestamp: new Date()
-    }
-
-    setMessages(prev => [...prev, userMessage])
-    const currentInput = inputText.trim()
-    setInputText('')
-    setIsLoading(true)
-
-    try {
-      const response = await fetch(`${API_BASE}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: currentInput, max_results: 5 })
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        const botMessage: Message = {
-          id: Date.now() + 1,
-          text: data.answer,
-          isBot: true,
-          timestamp: new Date(),
-          confidence: data.confidence,
-          sources: data.sources || []
+      const response = await fetch(`${API_BASE}/auth/me`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
         }
-        setMessages(prev => [...prev, botMessage])
+      })
+
+      if (response.ok) {
+        const userData = await response.json()
+        setUser(userData)
       } else {
-        throw new Error('Query failed')
+        localStorage.removeItem('token')
+        setToken(null)
       }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      const errorMessage: Message = {
-        id: Date.now() + 1,
-        text: systemStatus?.status !== 'ready' 
-          ? "I'm not ready yet. Please provide your website URL first, or wait for setup to complete."
-          : "Sorry, I encountered an error. Please try again.",
-        isBot: true,
-        timestamp: new Date()
-      }
-      setMessages(prev => [...prev, errorMessage])
-    }
-    setIsLoading(false)
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
+      console.error('Error fetching user info:', error)
+      localStorage.removeItem('token')
+      setToken(null)
+    } finally {
+      setLoading(false)
     }
   }
 
-  const getStatusBadge = () => {
-    if (!systemStatus) return null
+  const fetchKnowledgeBases = async () => {
+    if (!token) return
 
-    const statusConfig = {
-      ready: { 
-        color: 'bg-green-100 text-green-800 border-green-200', 
-        icon: <CheckIcon />,
-        text: `Ready (${systemStatus.total_chunks} chunks)`
-      },
-      not_ready: { 
-        color: 'bg-yellow-100 text-yellow-800 border-yellow-200', 
-        icon: <AlertIcon />,
-        text: 'Not Ready'
-      },
-      error: { 
-        color: 'bg-red-100 text-red-800 border-red-200', 
-        icon: <AlertIcon />,
-        text: 'Error'
+    try {
+      const response = await fetch(`${API_BASE}/knowledge-bases`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      if (response.ok) {
+        const kbs = await response.json()
+        setKnowledgeBases(kbs)
       }
+    } catch (error) {
+      console.error('Error fetching knowledge bases:', error)
     }
+  }
 
-    const config = statusConfig[systemStatus.status as keyof typeof statusConfig] || statusConfig.error
+  const handleLogin = (authToken: string, userData: User) => {
+    setToken(authToken)
+    setUser(userData)
+    localStorage.setItem('token', authToken)
+    setShowAuthModal(false)
+  }
 
+  const handleLogout = () => {
+    setToken(null)
+    setUser(null)
+    setKnowledgeBases([])
+    setSelectedKB(null)
+    localStorage.removeItem('token')
+  }
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase()
+  }
+
+  if (loading) {
     return (
-      <div className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.color}`}>
-        {config.icon}
-        {config.text}
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (!user || !token) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        {/* Hero Section */}
+        <div className="container mx-auto px-4 py-16">
+          <div className="text-center mb-12">
+            <div className="flex justify-center mb-6">
+              <div className="p-3 bg-blue-600 rounded-full">
+                <Bot className="h-8 w-8 text-white" />
+              </div>
+            </div>
+            <h1 className="text-4xl md:text-6xl font-bold text-gray-900 mb-4">
+              AI Chatbots for
+              <span className="text-blue-600"> Your Website</span>
+            </h1>
+            <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
+              Create intelligent chatbots powered by your own content. 
+              Each chatbot learns from your specific knowledge base to provide accurate, relevant answers.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Button 
+                size="lg" 
+                onClick={() => setShowAuthModal(true)}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                Get Started Free
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="lg">
+                View Demo
+              </Button>
+            </div>
+          </div>
+
+          {/* Features Grid */}
+          <div className="grid md:grid-cols-3 gap-8 mt-16">
+            <Card className="border-none shadow-lg">
+              <CardHeader className="text-center">
+                <div className="mx-auto mb-4 p-2 bg-green-100 rounded-full w-fit">
+                  <Database className="h-6 w-6 text-green-600" />
+                </div>
+                <CardTitle>Your Own Knowledge Base</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 text-center">
+                  Upload your website content or documents. Each user gets their own isolated knowledge base.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-lg">
+              <CardHeader className="text-center">
+                <div className="mx-auto mb-4 p-2 bg-purple-100 rounded-full w-fit">
+                  <Shield className="h-6 w-6 text-purple-600" />
+                </div>
+                <CardTitle>Secure & Private</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 text-center">
+                  Your data stays private. Each chatbot only answers questions based on your specific content.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-lg">
+              <CardHeader className="text-center">
+                <div className="mx-auto mb-4 p-2 bg-blue-100 rounded-full w-fit">
+                  <Zap className="h-6 w-6 text-blue-600" />
+                </div>
+                <CardTitle>Lightning Fast</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 text-center">
+                  Powered by advanced AI and vector search for instant, accurate responses to user queries.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* How it Works */}
+          <div className="mt-20">
+            <h2 className="text-3xl font-bold text-center text-gray-900 mb-12">
+              How It Works
+            </h2>
+            <div className="grid md:grid-cols-3 gap-8">
+              <div className="text-center">
+                <div className="mx-auto mb-4 p-3 bg-blue-600 rounded-full w-fit">
+                  <Globe className="h-6 w-6 text-white" />
+                </div>
+                <h3 className="text-xl font-semibold mb-2">1. Add Your Content</h3>
+                <p className="text-gray-600">
+                  Enter your website URL or upload documents to create your knowledge base.
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="mx-auto mb-4 p-3 bg-blue-600 rounded-full w-fit">
+                  <Bot className="h-6 w-6 text-white" />
+                </div>
+                <h3 className="text-xl font-semibold mb-2">2. AI Learns Your Content</h3>
+                <p className="text-gray-600">
+                  Our AI processes and understands your content to create intelligent responses.
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="mx-auto mb-4 p-3 bg-blue-600 rounded-full w-fit">
+                  <MessageCircle className="h-6 w-6 text-white" />
+                </div>
+                <h3 className="text-xl font-semibold mb-2">3. Deploy Your Chatbot</h3>
+                <p className="text-gray-600">
+                  Start chatting! Your AI assistant is ready to answer questions about your content.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Auth Modal */}
+        {showAuthModal && (
+          <AuthModal
+            onClose={() => setShowAuthModal(false)}
+            onSuccess={handleLogin}
+          />
+        )}
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-4xl mx-auto p-4 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-gray-900">RAG Chatbot</h1>
-          <div className="flex items-center gap-4">
-            {getStatusBadge()}
-            <button
-              onClick={() => setShowSetup(!showSetup)}
-              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <SettingsIcon />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Setup Panel - UPDATED with Single Page Button */}
-      {showSetup && (
-        <div className="bg-blue-50 border-b border-blue-200">
-          <div className="max-w-4xl mx-auto p-4">
-            <h3 className="text-lg font-medium text-blue-900 mb-3">Setup Website</h3>
+      <header className="bg-white border-b">
+        <div className="container mx-auto px-4">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-3">
+              <Bot className="h-8 w-8 text-blue-600" />
+              <h1 className="text-xl font-bold">AI Chatbot SaaS</h1>
+            </div>
             
-            {/* URL Input */}
-            <div className="mb-4">
-              <input
-                type="url"
-                value={websiteUrl}
-                onChange={(e) => setWebsiteUrl(e.target.value)}
-                placeholder="https://your-website.com"
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              />
-            </div>
-
-            {/* Buttons - UPDATED with both options */}
-            <div className="flex gap-3">
-              <button
-                onClick={handleSinglePageSetup}
-                disabled={!websiteUrl.trim() || isLoading}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-1"
-              >
-                <DocumentIcon />
-                🎯 Single Page Only
-              </button>
-              
-              <button
-                onClick={handleSetupWebsite}
-                disabled={!websiteUrl.trim() || isLoading}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-1"
-              >
-                <GlobeIcon />
-                🌐 Crawl Multiple Pages
-              </button>
-            </div>
-
-            {/* NEW: Explanation text */}
-            <div className="mt-3 text-sm text-blue-700 bg-blue-100 rounded-lg p-3">
-              <div className="font-medium mb-1">Choose your scraping mode:</div>
-              <div className="space-y-1 text-xs">
-                <div><strong>🎯 Single Page Only:</strong> Fast (30-60s) - Scrapes only the exact URL you provide</div>
-                <div><strong>🌐 Crawl Multiple Pages:</strong> Comprehensive (2-5min) - Follows links to discover more content</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Chat Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-4xl mx-auto space-y-4">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.isBot ? 'justify-start' : 'justify-end'}`}
-            >
-              <div className={`max-w-2xl rounded-lg shadow-sm ${
-                message.isBot
-                  ? 'bg-white border border-gray-200'
-                  : 'bg-blue-600 text-white'
-              } p-4`}>
-                <div className="text-sm">
-                  {message.text}
+            <div className="flex items-center gap-4">
+              <Badge variant="secondary" className="hidden sm:flex">
+                {knowledgeBases.length} Knowledge Base{knowledgeBases.length !== 1 ? 's' : ''}
+              </Badge>
+              <div className="flex items-center gap-3">
+                <Avatar>
+                  <AvatarFallback>{getInitials(user.full_name)}</AvatarFallback>
+                </Avatar>
+                <div className="hidden sm:block">
+                  <p className="text-sm font-medium">{user.full_name}</p>
+                  <p className="text-xs text-gray-500">{user.email}</p>
                 </div>
-                {message.confidence && (
-                  <div className="text-xs text-gray-500 mt-2">
-                    Confidence: {Math.round(message.confidence * 100)}%
-                  </div>
-                )}
-                {message.sources && message.sources.length > 0 && (
-                  <div className="text-xs text-gray-500 mt-2">
-                    Sources: {message.sources.length} found
-                  </div>
-                )}
+                <Button variant="outline" size="sm" onClick={handleLogout}>
+                  Logout
+                </Button>
               </div>
             </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input */}
-      <div className="bg-white border-t border-gray-200">
-        <div className="max-w-4xl mx-auto p-4">
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={
-                systemStatus?.status === 'ready'
-                  ? "Ask me anything about the website..."
-                  : "Enter your website URL to get started, or ask a question..."
-              }
-              disabled={isLoading}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:opacity-50"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={isLoading || !inputText.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <SendIcon />
-              Send
-            </button>
           </div>
-          
-          <div className="mt-2 text-xs text-gray-500 text-center">
-            {systemStatus?.status === 'ready' 
-              ? `Ready to answer questions about your website content`
-              : 'Tip: Use Single Page Mode for faster processing of specific pages'
-            }
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="container mx-auto px-4 py-8">
+        <div className="grid lg:grid-cols-4 gap-6">
+          {/* Sidebar - Knowledge Base Manager */}
+          <div className="lg:col-span-1">
+            <KnowledgeBaseManager
+              knowledgeBases={knowledgeBases}
+              selectedKB={selectedKB}
+              onSelectKB={setSelectedKB}
+              onRefresh={fetchKnowledgeBases}
+              token={token}
+            />
+          </div>
+
+          {/* Main Chat Area */}
+          <div className="lg:col-span-3">
+            {selectedKB ? (
+              <ChatInterface
+                knowledgeBaseId={selectedKB}
+                knowledgeBaseName={knowledgeBases.find(kb => kb.id === selectedKB)?.name || 'Unknown'}
+                token={token}
+              />
+            ) : (
+              <Card className="h-full">
+                <CardContent className="flex items-center justify-center h-96">
+                  <div className="text-center">
+                    <Bot className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">
+                      Select a Knowledge Base
+                    </h3>
+                    <p className="text-gray-500">
+                      Choose a knowledge base from the sidebar to start chatting with your AI assistant.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </div>
