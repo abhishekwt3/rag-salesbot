@@ -1,19 +1,20 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Button } from "@/app/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/app/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs"
-import { Input } from "@/app/components/ui/input"
-import { Label } from "@/app/components/ui/label"
-import { Alert, AlertDescription } from "@/app/components/ui/alert"
-import { Badge } from "@/app/components/ui/badge"
-import { Separator } from "@/app/components/ui/separator"
-import { Avatar, AvatarFallback, AvatarInitials } from "@/app/components/ui/avatar"
-import AuthModal from '@/app/components/AuthModal'
-import KnowledgeBaseManager from '@/app/components/KnowledgeBaseManager'
-import ChatInterface from '@/app/components/ChatInterface'
-import { Bot, Database, Users, Zap, ArrowRight, Shield, Globe, MessageCircle } from 'lucide-react'
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+import { Avatar, AvatarFallback, AvatarInitials } from "@/components/ui/avatar"
+import AuthModal from './components/AuthModal'
+import KnowledgeBaseManager from './components/KnowledgeBaseManager'
+import ChatInterface from './components/ChatInterface'
+import WidgetManager from './components/WidgetManager'
+import { Bot, Database, Users, Zap, ArrowRight, Shield, Globe, MessageCircle, Code } from 'lucide-react'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -41,6 +42,7 @@ export default function SaaSChatbotApp() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [selectedKB, setSelectedKB] = useState<string | null>(null)
   const [showAuthModal, setShowAuthModal] = useState(false)
+  const [activeTab, setActiveTab] = useState<'chat' | 'knowledge' | 'widgets'>('knowledge')
 
   // Check for existing token on mount
   useEffect(() => {
@@ -291,9 +293,23 @@ export default function SaaSChatbotApp() {
 
       {/* Main Content */}
       <div className="container mx-auto px-4 py-8">
-        <div className="grid lg:grid-cols-4 gap-6">
-          {/* Sidebar - Knowledge Base Manager */}
-          <div className="lg:col-span-1">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="w-full">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="knowledge" className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
+              Knowledge Bases
+            </TabsTrigger>
+            <TabsTrigger value="widgets" className="flex items-center gap-2">
+              <Code className="h-4 w-4" />
+              Chat Widgets
+            </TabsTrigger>
+            <TabsTrigger value="chat" className="flex items-center gap-2">
+              <MessageCircle className="h-4 w-4" />
+              Test Chat
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="knowledge" className="mt-6">
             <KnowledgeBaseManager
               knowledgeBases={knowledgeBases}
               selectedKB={selectedKB}
@@ -301,10 +317,17 @@ export default function SaaSChatbotApp() {
               onRefresh={fetchKnowledgeBases}
               token={token}
             />
-          </div>
+          </TabsContent>
 
-          {/* Main Chat Area */}
-          <div className="lg:col-span-3">
+          <TabsContent value="widgets" className="mt-6">
+            <WidgetManager
+              knowledgeBases={knowledgeBases}
+              token={token}
+              onRefresh={fetchKnowledgeBases}
+            />
+          </TabsContent>
+
+          <TabsContent value="chat" className="mt-6">
             {selectedKB ? (
               <ChatInterface
                 knowledgeBaseId={selectedKB}
@@ -312,22 +335,26 @@ export default function SaaSChatbotApp() {
                 token={token}
               />
             ) : (
-              <Card className="h-full">
-                <CardContent className="flex items-center justify-center h-96">
+              <Card className="h-96">
+                <CardContent className="flex items-center justify-center h-full">
                   <div className="text-center">
                     <Bot className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-gray-900 mb-2">
                       Select a Knowledge Base
                     </h3>
-                    <p className="text-gray-500">
-                      Choose a knowledge base from the sidebar to start chatting with your AI assistant.
+                    <p className="text-gray-500 mb-4">
+                      Go to the Knowledge Bases tab and create or select a knowledge base to test the chat.
                     </p>
+                    <Button onClick={() => setActiveTab('knowledge')}>
+                      <Database className="h-4 w-4 mr-2" />
+                      Manage Knowledge Bases
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
             )}
-          </div>
-        </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   )

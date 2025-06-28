@@ -11,19 +11,23 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from typing import List
 import uvicorn
+import uuid
 
 # Import database models and utilities
-from models import User, KnowledgeBase, get_db, init_database
+from models import User, KnowledgeBase, ChatWidget, WidgetConversation, get_db, init_database
 from auth import get_current_user, hash_password, create_access_token, authenticate_user
 from schemas import (
     UserCreate, UserLogin, Token, UserResponse,
     KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseStatus,
     WebsiteConfig, ProcessingResponse,
     QueryRequest, QueryResponse,
-    MessageResponse
+    MessageResponse, ChatWidgetCreate, ChatWidgetResponse, ChatWidgetUpdate,
+    WidgetChatRequest, WidgetChatResponse, WidgetConfigResponse
 )
 from sqlalchemy.orm import Session
 
@@ -349,6 +353,268 @@ async def get_knowledge_base_status(
         "total_chunks": knowledge_base.total_chunks,
         "last_updated": knowledge_base.last_updated
     }
+
+# Widget management endpoints
+@app.post("/widgets", response_model=ChatWidgetResponse)
+async def create_widget(
+    widget_data: ChatWidgetCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Verify ownership of knowledge base
+    knowledge_base = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == widget_data.knowledge_base_id,
+        KnowledgeBase.user_id == current_user.id
+    ).first()
+    
+    if not knowledge_base:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    # Create widget
+    widget = ChatWidget(
+        user_id=current_user.id,
+        knowledge_base_id=widget_data.knowledge_base_id,
+        name=widget_data.name,
+        website_url=widget_data.website_url,
+        primary_color=widget_data.primary_color,
+        widget_position=widget_data.widget_position,
+        welcome_message=widget_data.welcome_message,
+        placeholder_text=widget_data.placeholder_text,
+        widget_title=widget_data.widget_title,
+        show_branding=widget_data.show_branding,
+        allowed_domains=','.join(widget_data.allowed_domains) if widget_data.allowed_domains else None
+    )
+    
+    db.add(widget)
+    db.commit()
+    db.refresh(widget)
+    
+    logger.info(f"Widget created: {widget_data.name} for user {current_user.email}")
+    
+    return widget
+
+@app.get("/widgets", response_model=List[ChatWidgetResponse])
+async def list_widgets(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    widgets = db.query(ChatWidget).filter(
+        ChatWidget.user_id == current_user.id
+    ).all()
+    
+    return widgets
+
+@app.get("/widgets/{widget_id}", response_model=ChatWidgetResponse)
+async def get_widget(
+    widget_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.id == widget_id,
+        ChatWidget.user_id == current_user.id
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    
+    return widget
+
+@app.put("/widgets/{widget_id}", response_model=ChatWidgetResponse)
+async def update_widget(
+    widget_id: str,
+    widget_data: ChatWidgetUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.id == widget_id,
+        ChatWidget.user_id == current_user.id
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    
+    # Update fields
+    for field, value in widget_data.dict(exclude_unset=True).items():
+        if field == 'allowed_domains' and value is not None:
+            setattr(widget, field, ','.join(value))
+        else:
+            setattr(widget, field, value)
+    
+    widget.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(widget)
+    
+    return widget
+
+@app.delete("/widgets/{widget_id}")
+async def delete_widget(
+    widget_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.id == widget_id,
+        ChatWidget.user_id == current_user.id
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    
+    # Delete associated conversations
+    db.query(WidgetConversation).filter(WidgetConversation.widget_id == widget_id).delete()
+    
+    db.delete(widget)
+    db.commit()
+    
+    return MessageResponse(message="Widget deleted successfully")
+
+# Public widget endpoints (no authentication required)
+@app.get("/widget/{widget_key}/config", response_model=WidgetConfigResponse)
+async def get_widget_config(widget_key: str, db: Session = Depends(get_db)):
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.widget_key == widget_key,
+        ChatWidget.is_active == True
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found or inactive")
+    
+    return WidgetConfigResponse(
+        widget_key=widget.widget_key,
+        primary_color=widget.primary_color,
+        widget_position=widget.widget_position,
+        welcome_message=widget.welcome_message,
+        placeholder_text=widget.placeholder_text,
+        widget_title=widget.widget_title,
+        show_branding=widget.show_branding,
+        is_active=widget.is_active
+    )
+
+@app.post("/widget/{widget_key}/chat", response_model=WidgetChatResponse)
+async def widget_chat(
+    widget_key: str,
+    chat_request: WidgetChatRequest,
+    db: Session = Depends(get_db)
+):
+    import time as time_module
+    from fastapi import Request
+    
+    start_time = time_module.time()
+    
+    # Get widget
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.widget_key == widget_key,
+        ChatWidget.is_active == True
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found or inactive")
+    
+    # Generate session ID if not provided
+    session_id = chat_request.session_id or str(uuid.uuid4())
+    
+    # Get vector store and process query
+    try:
+        vector_store = vector_manager.get_vector_store(widget.user_id, widget.knowledge_base_id)
+        
+        if not vector_store.is_ready():
+            raise HTTPException(status_code=400, detail="Knowledge base not ready")
+        
+        result = await vector_store.process_query(chat_request.message, 5)
+        
+        # Log conversation
+        conversation = WidgetConversation(
+            widget_id=widget.id,
+            session_id=session_id,
+            user_message=chat_request.message,
+            bot_response=result["answer"],
+            confidence_score=result.get("confidence", 0.0),
+            response_time_ms=int((time_module.time() - start_time) * 1000),
+            user_ip=None,  # Simplified for demo
+            user_agent='',
+            referrer_url=''
+        )
+        
+        db.add(conversation)
+        
+        # Update widget analytics
+        widget.total_messages += 1
+        widget.last_used = datetime.utcnow()
+        
+        db.commit()
+        
+        return WidgetChatResponse(
+            response=result["answer"],
+            session_id=session_id,
+            confidence=result.get("confidence", 0.0),
+            sources=result.get("sources", [])
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in widget chat: {e}")
+        raise HTTPException(status_code=500, detail="Error processing message")
+
+# Widget JavaScript endpoint
+@app.get("/widget/{widget_key}/script.js")
+async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
+    widget = db.query(ChatWidget).filter(
+        ChatWidget.widget_key == widget_key,
+        ChatWidget.is_active == True
+    ).first()
+    
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    
+    # Generate the JavaScript widget code
+    script = f"""
+// AI Chatbot Widget - Generated for {widget.name}
+(function() {{
+    var WIDGET_CONFIG = {{
+        widgetKey: '{widget.widget_key}',
+        apiUrl: '{os.getenv("WIDGET_API_URL", "http://localhost:8000")}',
+        primaryColor: '{widget.primary_color}',
+        position: '{widget.widget_position}',
+        welcomeMessage: '{widget.welcome_message}',
+        placeholderText: '{widget.placeholder_text}',
+        title: '{widget.widget_title}',
+        showBranding: {str(widget.show_branding).lower()}
+    }};
+    
+    // Load widget CSS and JS
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = WIDGET_CONFIG.apiUrl + '/static/widget.css';
+    document.head.appendChild(link);
+    
+    var script = document.createElement('script');
+    script.src = WIDGET_CONFIG.apiUrl + '/static/widget.js';
+    script.onload = function() {{
+        if (window.initChatWidget) {{
+            window.initChatWidget(WIDGET_CONFIG);
+        }}
+    }};
+    document.head.appendChild(script);
+}})();
+"""
+    
+    return Response(content=script, media_type="application/javascript")
+
+# Serve static widget files
+@app.get("/static/{file_path:path}")
+async def serve_static(file_path: str):
+    """Serve static widget files"""
+    from fastapi.responses import FileResponse
+    import os
+    
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    file_location = os.path.join(static_dir, file_path)
+    
+    if os.path.exists(file_location):
+        return FileResponse(file_location)
+    else:
+        raise HTTPException(status_code=404, detail="File not found")
 
 # Health check
 @app.get("/")

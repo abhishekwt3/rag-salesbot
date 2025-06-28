@@ -77,3 +77,70 @@ class MessageResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+# Widget schemas
+class ChatWidgetCreate(BaseModel):
+    name: str
+    knowledge_base_id: str
+    website_url: Optional[str] = None
+    primary_color: Optional[str] = "#2563eb"
+    widget_position: Optional[str] = "bottom-right"
+    welcome_message: Optional[str] = "Hi! How can I help you today?"
+    placeholder_text: Optional[str] = "Type your message..."
+    widget_title: Optional[str] = "Chat Support"
+    show_branding: Optional[bool] = True
+    allowed_domains: Optional[List[str]] = []
+
+class ChatWidgetResponse(BaseModel):
+    id: str
+    name: str
+    knowledge_base_id: str
+    widget_key: str
+    website_url: Optional[str] = None
+    primary_color: str
+    widget_position: str
+    welcome_message: str
+    placeholder_text: str
+    widget_title: str
+    is_active: bool
+    show_branding: bool
+    allowed_domains: Optional[str] = None
+    total_conversations: int
+    total_messages: int
+    last_used: Optional[str] = None
+    created_at: str
+    
+    class Config:
+        from_attributes = True
+
+class ChatWidgetUpdate(BaseModel):
+    name: Optional[str] = None
+    website_url: Optional[str] = None
+    primary_color: Optional[str] = None
+    widget_position: Optional[str] = None
+    welcome_message: Optional[str] = None
+    placeholder_text: Optional[str] = None
+    widget_title: Optional[str] = None
+    is_active: Optional[bool] = None
+    show_branding: Optional[bool] = None
+    allowed_domains: Optional[List[str]] = None
+
+class WidgetChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+class WidgetChatResponse(BaseModel):
+    response: str
+    session_id: str
+    confidence: float
+    sources: List[dict] = []
+
+class WidgetConfigResponse(BaseModel):
+    widget_key: str
+    primary_color: str
+    widget_position: str
+    welcome_message: str
+    placeholder_text: str
+    widget_title: str
+    show_branding: bool
+    is_active: bool

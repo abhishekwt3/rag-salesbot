@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Button } from "@/app/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/card"
-import { Input } from "@/app/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 //import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/app/components/ui/badge"
-import { ScrollArea } from "@/app/components/ui/scroll-area"
-import { Separator } from "@/app/components/ui/separator"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
 import { 
   Send, 
   Bot, 
@@ -126,6 +126,7 @@ export default function ChatInterface({
         }
         setMessages(prev => prev.slice(0, -1).concat([errorMessage]))
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       const errorMessage: Message = {
         id: Date.now() + 2,
