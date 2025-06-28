@@ -1,31 +1,40 @@
-# requirements.txt
+# SaaS RAG Chatbot Backend Requirements
+
+# FastAPI and web framework
 fastapi==0.104.1
 uvicorn==0.24.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+
+# Database and ORM
+sqlalchemy==2.0.41
+# For development - SQLite is built-in
+# For production PostgreSQL:
+# psycopg2-binary==2.9.9
+
+# Authentication and security
+bcrypt==4.1.2
+pyjwt==2.8.0
+
+# HTTP client
+httpx==0.28.1
+
+# Web scraping
 playwright==1.40.0
 beautifulsoup4==4.12.2
-openai==1.91.0
-chromadb==1.0.13
-tiktoken==0.9.0
-python-dotenv==1.0.0
-pydantic==2.5.0
-httpx==0.28.1
-python-multipart==0.0.6
 
-# requirements.txt - Updated for Fast Semantic Search
-# fastapi==0.104.1
-# uvicorn==0.24.0
-# playwright==1.40.0
-# beautifulsoup4==4.12.2
-# pydantic==2.5.0
-# httpx==0.28.1
-# python-multipart==0.0.6
-python-dotenv==1.0.0
-
-# NEW: Fast Semantic Search Dependencies
+# ML and embeddings
 sentence-transformers==4.1.0
 faiss-cpu==1.11.0
 numpy==2.3.1
 torch==2.7.1
 
-# Optional: For even faster CPU inference
-# onnxruntime==1.16.0  # Uncomment for ONNX optimization
+# Data processing
+pydantic[email]==2.5.0
+
+# Logging and utilities
+python-dateutil==2.8.2
+
+# Optional: For production
+# gunicorn==21.2.0  # Production WSGI server
+# redis==5.0.1      # For caching and session storage

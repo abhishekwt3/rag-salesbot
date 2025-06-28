@@ -294,7 +294,6 @@ class FastSentenceTransformerStore:
 # Updated requirements.txt additions:
 """
 Add these to requirements.txt:
-
 sentence-transformers==2.2.2
 faiss-cpu==1.7.4
 numpy==1.24.3
