@@ -107,8 +107,8 @@ class ChatWidgetResponse(BaseModel):
     allowed_domains: Optional[str] = None
     total_conversations: int
     total_messages: int
-    last_used: Optional[str] = None
-    created_at: str
+    last_used: Optional[str] = None  # ← This expects a string
+    created_at: str                   # ← This expects a string
     
     class Config:
         from_attributes = True
@@ -144,3 +144,17 @@ class WidgetConfigResponse(BaseModel):
     widget_title: str
     show_branding: bool
     is_active: bool
+
+# File upload schemas
+class DocumentUploadResponse(BaseModel):
+    message: str
+    knowledge_base_id: str
+    status: str
+    files_processed: int
+    total_chunks_added: int
+
+class DocumentProcessingStatus(BaseModel):
+    status: str  # "processing", "completed", "error"
+    files_processed: int
+    total_chunks_added: int
+    error_message: Optional[str] = None

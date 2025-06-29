@@ -400,3 +400,83 @@ Answer:"""
             
         except Exception as e:
             logger.error(f"Error clearing data: {e}")
+
+    # Replace the previous process_document method with this corrected version
+    async def process_document(self, document_data: dict) -> int:
+        """
+        Process a single document and add it to the vector store
+
+        Args:
+            document_data: Dictionary with 'text' and 'metadata' keys
+
+        Returns:
+            Number of chunks added
+        """
+        try:
+            text_content = document_data.get('text', '')
+            metadata = document_data.get('metadata', {})
+
+            if not text_content.strip():
+                return 0
+
+            # Load model if not already loaded
+            self._load_model()
+
+            # Create a page-like structure for the _create_chunks method
+            page_structure = {
+                'content': text_content,
+                'url': metadata.get('source_url', 'uploaded_file'),
+                'title': metadata.get('title', 'Uploaded Document'),
+                'scraped_at': metadata.get('uploaded_at', datetime.now().isoformat())
+            }
+
+            # Use existing _create_chunks method
+            chunks = self._create_chunks(page_structure)
+
+            if not chunks:
+                return 0
+
+            # Generate embeddings for the new chunks
+            texts = [chunk['text'] for chunk in chunks]
+            new_embeddings = self._generate_embeddings_fast(texts)
+
+            if not new_embeddings:
+                return 0
+
+            # Add to existing data
+            self.chunks.extend(chunks)
+
+            # Handle embeddings
+            if self.embeddings is None:
+                self.embeddings = new_embeddings
+            else:
+                self.embeddings.extend(new_embeddings)
+
+            # Rebuild FAISS index with all embeddings
+            embeddings_array = np.array(self.embeddings).astype('float32')
+
+            # Create new index
+            self.index = faiss.IndexFlatIP(self.dimension)  # Inner Product for cosine similarity
+
+            # Normalize embeddings for cosine similarity
+            faiss.normalize_L2(embeddings_array)
+            self.index.add(embeddings_array)
+
+            # Update metadata
+            self.ready = True
+            self.last_updated = datetime.now().isoformat()
+
+            # Save to disk
+            self._save_to_disk()
+
+            logger.info(f"Added {len(chunks)} chunks from document: {metadata.get('title', 'Unknown')}")
+
+            return len(chunks)
+
+        except Exception as e:
+            logger.error(f"Error processing document: {e}")
+            return 0
+
+    def get_total_chunks(self) -> int:
+        """Get the total number of chunks in the vector store"""
+        return len(self.chunks)

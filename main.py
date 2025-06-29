@@ -6,12 +6,14 @@ import time
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
+import tempfile
+import docx
 
 # Load .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from typing import List
@@ -27,7 +29,7 @@ from schemas import (
     WebsiteConfig, ProcessingResponse,
     QueryRequest, QueryResponse,
     MessageResponse, ChatWidgetCreate, ChatWidgetResponse, ChatWidgetUpdate,
-    WidgetChatRequest, WidgetChatResponse, WidgetConfigResponse
+    WidgetChatRequest, WidgetChatResponse, WidgetConfigResponse, DocumentUploadResponse
 )
 from sqlalchemy.orm import Session
 
@@ -354,6 +356,29 @@ async def get_knowledge_base_status(
         "last_updated": knowledge_base.last_updated
     }
 
+#Widget helper function
+def widget_to_response(widget: ChatWidget) -> dict:
+    """Convert a ChatWidget database object to response format"""
+    return {
+        "id": widget.id,
+        "name": widget.name,
+        "knowledge_base_id": widget.knowledge_base_id,
+        "widget_key": widget.widget_key,
+        "website_url": widget.website_url,
+        "primary_color": widget.primary_color,
+        "widget_position": widget.widget_position,
+        "welcome_message": widget.welcome_message,
+        "placeholder_text": widget.placeholder_text,
+        "widget_title": widget.widget_title,
+        "is_active": widget.is_active,
+        "show_branding": widget.show_branding,
+        "allowed_domains": widget.allowed_domains,
+        "total_conversations": widget.total_conversations,
+        "total_messages": widget.total_messages,
+        "last_used": widget.last_used.isoformat() if widget.last_used else None,
+        "created_at": widget.created_at.isoformat() if widget.created_at else None,
+    }
+
 # Widget management endpoints
 @app.post("/widgets", response_model=ChatWidgetResponse)
 async def create_widget(
@@ -391,7 +416,7 @@ async def create_widget(
     
     logger.info(f"Widget created: {widget_data.name} for user {current_user.email}")
     
-    return widget
+    return ChatWidgetResponse(**widget_to_response(widget))
 
 @app.get("/widgets", response_model=List[ChatWidgetResponse])
 async def list_widgets(
@@ -402,7 +427,8 @@ async def list_widgets(
         ChatWidget.user_id == current_user.id
     ).all()
     
-    return widgets
+    return [ChatWidgetResponse(**widget_to_response(widget)) for widget in widgets]
+
 
 @app.get("/widgets/{widget_id}", response_model=ChatWidgetResponse)
 async def get_widget(
@@ -418,7 +444,7 @@ async def get_widget(
     if not widget:
         raise HTTPException(status_code=404, detail="Widget not found")
     
-    return widget
+    return ChatWidgetResponse(**widget_to_response(widget))
 
 @app.put("/widgets/{widget_id}", response_model=ChatWidgetResponse)
 async def update_widget(
@@ -446,7 +472,8 @@ async def update_widget(
     db.commit()
     db.refresh(widget)
     
-    return widget
+    return ChatWidgetResponse(**widget_to_response(widget))
+
 
 @app.delete("/widgets/{widget_id}")
 async def delete_widget(
@@ -600,6 +627,217 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
 """
     
     return Response(content=script, media_type="application/javascript")
+
+# Add these endpoints to your main.py
+
+@app.post("/knowledge-bases/{knowledge_base_id}/upload-documents", response_model=DocumentUploadResponse)
+async def upload_documents(
+    knowledge_base_id: str,
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload and process documents (TXT, DOCX) for a knowledge base"""
+    
+    # Verify ownership
+    knowledge_base = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == knowledge_base_id,
+        KnowledgeBase.user_id == current_user.id
+    ).first()
+    
+    if not knowledge_base:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    # Validate file types
+    allowed_extensions = {'.txt', '.docx', '.doc'}
+    valid_files = []
+    
+    for file in files:
+        if not file.filename:
+            continue
+            
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in allowed_extensions:
+            continue
+            
+        # Check file size (max 10MB per file)
+        file.file.seek(0, 2)  # Seek to end
+        file_size = file.file.tell()
+        file.file.seek(0)  # Seek back to beginning
+        
+        if file_size > 10 * 1024 * 1024:  # 10MB limit
+            continue
+            
+        valid_files.append(file)
+    
+    if not valid_files:
+        raise HTTPException(
+            status_code=400, 
+            detail="No valid files found. Please upload TXT or DOCX files (max 10MB each)"
+        )
+    
+    # Update status to processing
+    knowledge_base.status = "processing"
+    db.commit()
+    
+    # Process files in background
+    background_tasks.add_task(
+        process_documents_background,
+        str(current_user.id),
+        knowledge_base_id,
+        valid_files
+    )
+    
+    logger.info(f"Document processing started for KB {knowledge_base_id}: {len(valid_files)} files")
+    
+    return DocumentUploadResponse(
+        message=f"Processing {len(valid_files)} documents",
+        knowledge_base_id=knowledge_base_id,
+        status="processing",
+        files_processed=0,
+        total_chunks_added=0
+    )
+
+async def process_documents_background(user_id: str, knowledge_base_id: str, files: List[UploadFile]):
+    """Background task to process uploaded documents"""
+    from models import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        # Get vector store for this user and knowledge base
+        vector_store = vector_manager.get_vector_store(user_id, knowledge_base_id)
+        
+        processed_files = 0
+        total_chunks_added = 0
+        
+        for file in files:
+            try:
+                # Create temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as temp_file:
+                    # Copy uploaded file content to temp file
+                    content = await file.read()
+                    temp_file.write(content)
+                    temp_file_path = temp_file.name
+                
+                # Extract text based on file type
+                text_content = extract_text_from_file(temp_file_path, file.filename)
+                
+                if text_content.strip():
+                    # Create document data for processing
+                    document_data = {
+                        "text": text_content,
+                        "metadata": {
+                            "source_url": f"uploaded_file://{file.filename}",
+                            "title": file.filename,
+                            "file_type": Path(file.filename).suffix.lower(),
+                            "uploaded_at": datetime.utcnow().isoformat()
+                        }
+                    }
+                    
+                    # Process through vector store
+                    chunks_added = await vector_store.process_document(document_data)
+                    total_chunks_added += chunks_added
+                    processed_files += 1
+                    
+                    logger.info(f"Processed document {file.filename}: {chunks_added} chunks added")
+                
+                # Clean up temp file
+                os.unlink(temp_file_path)
+                
+            except Exception as e:
+                logger.error(f"Error processing file {file.filename}: {e}")
+                # Clean up temp file if it exists
+                if 'temp_file_path' in locals():
+                    try:
+                        os.unlink(temp_file_path)
+                    except:
+                        pass
+                continue
+        
+        # Update knowledge base status
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+        if kb:
+            kb.status = "ready" if processed_files > 0 else "error"
+            kb.total_chunks = vector_store.get_total_chunks()
+            kb.last_updated = datetime.utcnow()
+            db.commit()
+        
+        logger.info(f"Document processing completed for KB {knowledge_base_id}: {processed_files} files, {total_chunks_added} chunks")
+        
+    except Exception as e:
+        logger.error(f"Error processing documents for KB {knowledge_base_id}: {e}")
+        # Update status to error
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+        if kb:
+            kb.status = "error"
+            db.commit()
+    finally:
+        db.close()
+
+def extract_text_from_file(file_path: str, filename: str) -> str:
+    """Extract text content from various file types"""
+    file_ext = Path(filename).suffix.lower()
+    
+    try:
+        if file_ext == '.txt':
+            # Handle TXT files
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+                
+        elif file_ext in ['.docx', '.doc']:
+            # Handle Word documents
+            try:
+                doc = docx.Document(file_path)
+                text_content = []
+                
+                # Extract text from paragraphs
+                for paragraph in doc.paragraphs:
+                    if paragraph.text.strip():
+                        text_content.append(paragraph.text.strip())
+                
+                # Extract text from tables
+                for table in doc.tables:
+                    for row in table.rows:
+                        for cell in row.cells:
+                            if cell.text.strip():
+                                text_content.append(cell.text.strip())
+                
+                return '\n\n'.join(text_content)
+                
+            except Exception as e:
+                logger.error(f"Error processing Word document {filename}: {e}")
+                return ""
+        
+        else:
+            logger.warning(f"Unsupported file type: {file_ext}")
+            return ""
+            
+    except Exception as e:
+        logger.error(f"Error extracting text from {filename}: {e}")
+        return ""
+
+@app.get("/knowledge-bases/{knowledge_base_id}/processing-status")
+async def get_processing_status(
+    knowledge_base_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get the current processing status of a knowledge base"""
+    knowledge_base = db.query(KnowledgeBase).filter(
+        KnowledgeBase.id == knowledge_base_id,
+        KnowledgeBase.user_id == current_user.id
+    ).first()
+    
+    if not knowledge_base:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    return DocumentProcessingStatus(
+        status=knowledge_base.status,
+        files_processed=0,  # You could track this in the database if needed
+        total_chunks_added=knowledge_base.total_chunks,
+        error_message=None if knowledge_base.status != "error" else "Processing failed"
+    )
 
 # Serve static widget files
 @app.get("/static/{file_path:path}")
