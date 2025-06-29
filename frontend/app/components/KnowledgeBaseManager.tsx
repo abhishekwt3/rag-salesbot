@@ -263,9 +263,9 @@ export default function KnowledgeBaseManager({
       </div>
 
       {/* Knowledge Bases List */}
-      <div className="space-y-3">
+      <div className={knowledgeBases.length === 0 ? "" : "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4"}>
         {knowledgeBases.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
+          <div className="text-center py-8 text-gray-500 col-span-full">
             <div className="text-2xl mb-2">📚</div>
             <p className="text-sm">No knowledge bases yet.</p>
             <p className="text-xs">Create one to get started!</p>
@@ -322,19 +322,19 @@ export default function KnowledgeBaseManager({
                             onClick={(e) => e.stopPropagation()}
                           >
                             <Globe className="h-3 w-3 mr-1" />
-                            Add Website
+                            Add Webpage
                           </Button>
                         </DialogTrigger>
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Process Website</DialogTitle>
+                            <DialogTitle>Process Webpage</DialogTitle>
                             <DialogDescription>
                               Enter a website URL to extract and process its content for this knowledge base.
                             </DialogDescription>
                           </DialogHeader>
                           <div className="space-y-4">
                             <div>
-                              <Label htmlFor="url">Website URL</Label>
+                              <Label className="pb-2" htmlFor="url">Website URL</Label>
                               <Input
                                 id="url"
                                 type="url"
@@ -344,14 +344,14 @@ export default function KnowledgeBaseManager({
                               />
                             </div>
                             <div>
-                              <Label htmlFor="max_pages">Maximum Pages to Process</Label>
+                              <Label className="pb-2" htmlFor="max_pages">Maximum Pages to Process</Label>
                               <Input
                                 id="max_pages"
                                 type="number"
                                 value={websiteForm.max_pages}
-                                onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 50 }))}
+                                onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 10 }))}
                                 min="1"
-                                max="500"
+                                max="10"
                               />
                             </div>
                             <div className="flex justify-end gap-2">
