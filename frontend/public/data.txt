@@ -1,0 +1,38 @@
+Pricing for CRM (Customer Relationship Managment tool)
+Free Plan:
+1 User 
+1 Project 
+200 Tasks
+
+Basic Plan:
+10 User 
+25 Project 
+3000 Tasks
+$15/Month 
+
+Advance Plan:
+50 User 
+100 Project 
+30000 Tasks
+$45/Month 
+
+Pricing for Marketing Automation:
+Free Plan:
+1 User 
+1 Project 
+20 Tasks
+
+Basic Plan:
+10 User 
+25 Project 
+3000 Tasks
+$25/Month 
+
+Advance Plan:
+50 User 
+100 Project 
+30000 Tasks
+$100/Month 
+
+
+

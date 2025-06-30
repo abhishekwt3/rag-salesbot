@@ -224,7 +224,7 @@ export default function KnowledgeBaseManager({
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label htmlFor="name">Name</Label>
+                <Label className="pb-2" htmlFor="name">Name</Label>
                 <Input
                   id="name"
                   value={newKBForm.name}
@@ -233,7 +233,7 @@ export default function KnowledgeBaseManager({
                 />
               </div>
               <div>
-                <Label htmlFor="description">Description</Label>
+                <Label className="pb-2"htmlFor="description">Description</Label>
                 <Textarea
                   id="description"
                   value={newKBForm.description}

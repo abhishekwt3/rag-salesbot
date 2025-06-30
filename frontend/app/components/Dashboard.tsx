@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import WidgetIntegration from "./WidgetIntegration"
 import {
   Bot,
   Database,
@@ -60,6 +61,14 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
       .map((n) => n[0])
       .join("")
       .toUpperCase()
+  }
+
+  // Handle knowledge base selection with optional tab switching
+  const handleKBSelection = (id: string, shouldChangeTab: boolean = false) => {
+    setSelectedKB(id)
+    if (id && shouldChangeTab) {
+      setActiveTab("chat")
+    }
   }
 
   const selectedKnowledgeBase = knowledgeBases.find((kb) => kb.id === selectedKB)
@@ -223,7 +232,7 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
                             key={kb.id}
                             className="border border-gray-200 hover:border-brand-dark-cyan/30 hover:shadow-md transition-all duration-300 cursor-pointer p-4"
                             onClick={() => {
-                              setSelectedKB(kb.id)
+                              handleKBSelection(kb.id, false)
                               setActiveTab("knowledge")
                             }}
                           >
@@ -249,8 +258,7 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
                                 className="flex-1 text-xs py-1.5 bg-transparent"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  setSelectedKB(kb.id)
-                                  setActiveTab("chat")
+                                  handleKBSelection(kb.id, true) // Auto-switch to chat when testing
                                 }}
                               >
                                 <Play className="h-3 w-3 mr-1" />
@@ -412,12 +420,7 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
                   <KnowledgeBaseManager
                     knowledgeBases={knowledgeBases}
                     selectedKB={selectedKB}
-                    onSelectKB={(id) => {
-                      setSelectedKB(id)
-                      if (id) {
-                        setActiveTab("chat")
-                      }
-                    }}
+                    onSelectKB={(id) => handleKBSelection(id, false)} // Don't auto-switch tabs
                     onRefresh={onRefresh}
                     token={token}
                   />
@@ -475,113 +478,15 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
           </TabsContent>
 
           {/* Widgets Tab */}
-          <TabsContent value="widgets" className="space-y-6">
-            <div className="max-w-4xl mx-auto">
-              <Card className="bg-white border-0 shadow-md">
-                <CardHeader className="pb-6">
-                  <CardTitle className="text-2xl font-bold text-brand-black flex items-center gap-2">
-                    <Code className="h-6 w-6 text-brand-dark-cyan" />
-                    Widget Integration
-                  </CardTitle>
-                  <CardDescription className="text-base text-brand-midnight/60 mt-2">
-                    Get the embed code to add your AI assistant to your website. Customize the appearance and behavior.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {selectedKB && selectedKnowledgeBase ? (
-                    <div className="space-y-8">
-                      {/* Widget Preview */}
-                      <div className="bg-gradient-to-br from-brand-dark-cyan/5 to-brand-cerulean/5 rounded-xl p-6">
-                        <h3 className="text-lg font-semibold text-brand-black mb-4 flex items-center gap-2">
-                          <Bot className="h-5 w-5" />
-                          Widget Preview
-                        </h3>
-                        <div className="flex justify-center">
-                          <div className="bg-white rounded-xl border shadow-lg p-4 max-w-sm w-full">
-                            <div className="flex items-center gap-2 mb-3">
-                              <Bot className="h-6 w-6 text-brand-dark-cyan" />
-                              <span className="text-base font-medium text-brand-black">AI Assistant</span>
-                              <Badge className="ml-auto bg-green-100 text-green-700 text-xs px-2 py-0.5">Live</Badge>
-                            </div>
-                            <div className="text-sm text-brand-midnight/80 bg-gray-50 rounded-lg p-3">
-                              👋 Hi! I can help you with questions about {selectedKnowledgeBase.name}.
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+        <TabsContent value="widgets" className="space-y-6">
+            <WidgetIntegration 
+            token={token} 
+            knowledgeBases={knowledgeBases} 
+          />
+        </TabsContent>
 
-                      {/* Embed Code */}
-                      <div className="space-y-4">
-                        <h3 className="text-lg font-semibold text-brand-black flex items-center gap-2">
-                          <Code className="h-5 w-5" />
-                          Embed Code
-                        </h3>
-                        <div className="bg-brand-black/95 p-4 rounded-xl font-mono text-sm overflow-x-auto">
-                          <div className="text-gray-400 mb-1">{"<!-- Add this to your website -->"}</div>
-                          <div className="text-blue-400">{"<script"}</div>
-                          <div className="ml-3 text-green-400">src="https://salesbot.ai/embed.js"</div>
-                          <div className="ml-3 text-green-400">data-kb-id="{selectedKB}"</div>
-                          <div className="ml-3 text-yellow-400">data-theme=&quot;custom&quot;</div>
-                          <div className="text-blue-400">{">"}</div>
-                          <div className="text-blue-400">{"</script>"}</div>
-                        </div>
-                        <Button className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white px-6 py-2 text-sm font-medium">
-                          <Code className="h-4 w-4 mr-2" />
-                          Copy Code
-                        </Button>
-                      </div>
-
-                      {/* Widget Settings */}
-                      <div className="space-y-4">
-                        <h3 className="text-lg font-semibold text-brand-black flex items-center gap-2">
-                          <Settings className="h-5 w-5" />
-                          Widget Settings
-                        </h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-3">
-                            <label className="text-sm font-medium text-brand-black">Widget Position</label>
-                            <select className="w-full p-3 border border-gray-200 rounded-lg bg-white focus:border-brand-dark-cyan focus:ring-2 focus:ring-brand-dark-cyan/20 outline-none text-sm">
-                              <option>Bottom Right</option>
-                              <option>Bottom Left</option>
-                              <option>Top Right</option>
-                              <option>Top Left</option>
-                            </select>
-                          </div>
-                          <div className="space-y-3">
-                            <label className="text-sm font-medium text-brand-black">Theme Color</label>
-                            <div className="flex gap-3">
-                              <button className="w-12 h-12 bg-brand-dark-cyan rounded-lg border-2 border-brand-dark-cyan shadow-sm hover:scale-105 transition-transform"></button>
-                              <button className="w-12 h-12 bg-brand-cerulean rounded-lg border-2 border-transparent hover:border-brand-cerulean shadow-sm hover:scale-105 transition-transform"></button>
-                              <button className="w-12 h-12 bg-brand-midnight rounded-lg border-2 border-transparent hover:border-brand-midnight shadow-sm hover:scale-105 transition-transform"></button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-16">
-                      <div className="w-20 h-20 bg-brand-dark-cyan/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                        <Code className="h-10 w-10 text-brand-dark-cyan" />
-                      </div>
-                      <h3 className="text-xl font-semibold text-brand-black mb-3">Select a Knowledge Base</h3>
-                      <p className="text-base text-brand-midnight/60 mb-6 max-w-md mx-auto">
-                        Choose a knowledge base to generate the widget embed code for your website.
-                      </p>
-                      <Button
-                        onClick={() => setActiveTab("knowledge")}
-                        className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white px-6 py-2 text-sm font-medium"
-                      >
-                        <Database className="h-4 w-4 mr-2" />
-                        Go to Knowledge Bases
-                      </Button>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-        </Tabs>
-      </main>
+      </Tabs>
+        </main>
     </div>
   )
 }
