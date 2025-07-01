@@ -1,346 +1,212 @@
-// Simple Chat Bar Widget JavaScript
-;(() => {
-  let widgetConfig = {}
-  let sessionId = null
-  const messages = []
-  let isLoading = false
-  let isExpanded = false
+// Simplified AI Chat Widget JavaScript
+(function() {
+  let config = {
+    widgetKey: 'demo',
+    apiUrl: 'http://localhost:8000',
+    primaryColor: '#119da4',
+    title: 'Chat Support',
+    welcomeMessage: 'Hi! How can I help you today?',
+    placeholderText: 'Type your message...',
+    showBranding: true
+  };
+  
+  let isOpen = false;
+  let sessionId = generateSessionId();
+  let isLoading = false;
 
-  // Generate session ID
   function generateSessionId() {
-    return "salesbot_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now()
+    return 'widget_' + Math.random().toString(36).substr(2, 9);
   }
 
-  // Create simple widget HTML
-  function createWidgetHTML() {
-    return `
-      <div id="ai-chat-bar-widget" class="ai-chat-bar-widget collapsed">
-        <div class="ai-chat-widget-card">
-          <!-- Messages Container (hidden when collapsed) -->
-          <div id="ai-chat-messages-container" class="ai-chat-messages-container">
-            <div id="ai-chat-messages"></div>
-          </div>
-
-          <!-- Simple Input Bar -->
-          <div id="ai-chat-input-container" class="ai-chat-input-container">
-            <div class="ai-chat-input-wrapper">
-              <textarea 
-                id="ai-chat-input" 
-                class="ai-chat-input" 
-                placeholder="${widgetConfig.placeholderText || "Ask me anything..."}"
-                rows="1"
-                maxlength="2000"
-              ></textarea>
-            </div>
-            <button id="ai-chat-send" class="ai-chat-send" title="Send message">
+  function createWidget() {
+    const widgetHTML = `
+      <div id="ai-chat-widget" class="ai-chat-widget">
+        <div id="ai-chat-container" class="ai-chat-container">
+          <div class="ai-chat-header">
+            <h4 class="ai-chat-title">${config.title}</h4>
+            <button id="ai-chat-close" class="ai-chat-close">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div id="ai-chat-messages" class="ai-chat-messages">
+            <div class="ai-chat-message bot">
+              ${config.welcomeMessage}
+            </div>
+          </div>
+          
+          <div class="ai-chat-input-container">
+            <textarea 
+              id="ai-chat-input" 
+              class="ai-chat-input" 
+              placeholder="${config.placeholderText}"
+              rows="1"
+            ></textarea>
+            <button id="ai-chat-send" class="ai-chat-send">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
               </svg>
             </button>
           </div>
+          
+          ${config.showBranding ? `
+            <div class="ai-chat-branding">
+              Powered by <a href="#" target="_blank">salesbot</a>
+            </div>
+          ` : ''}
         </div>
+        
+        <button id="ai-chat-toggle" class="ai-chat-toggle">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4l4 4 4-4h4c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+          </svg>
+        </button>
       </div>
-    `
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', widgetHTML);
+    setupEventListeners();
   }
 
-  // Add message to chat
-  function addMessage(content, isUser = false, type = "normal") {
-    const messagesContainer = document.getElementById("ai-chat-messages")
-    if (!messagesContainer) return
+  function setupEventListeners() {
+    const toggle = document.getElementById('ai-chat-toggle');
+    const close = document.getElementById('ai-chat-close');
+    const send = document.getElementById('ai-chat-send');
+    const input = document.getElementById('ai-chat-input');
 
-    const messageDiv = document.createElement("div")
-    let className = `ai-chat-message ${isUser ? "user" : "bot"}`
-    if (type === "error") className += " error"
+    toggle.addEventListener('click', toggleChat);
+    close.addEventListener('click', closeChat);
+    send.addEventListener('click', sendMessage);
+    
+    input.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
 
-    messageDiv.className = className
-    messageDiv.innerHTML = `
-      <div class="ai-chat-message-avatar">${isUser ? "" : "🤖"}</div>
-      <div class="ai-chat-message-content">${content}</div>
-    `
+    // Auto-resize textarea
+    input.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = this.scrollHeight + 'px';
+    });
+  }
 
-    messagesContainer.appendChild(messageDiv)
-    messages.push({ content, isUser, type, timestamp: Date.now() })
-
-    // Auto-scroll to bottom
-    const container = document.getElementById("ai-chat-messages-container")
-    if (container) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth",
-      })
+  function toggleChat() {
+    const container = document.getElementById('ai-chat-container');
+    if (isOpen) {
+      closeChat();
+    } else {
+      container.classList.add('open');
+      isOpen = true;
+      document.getElementById('ai-chat-input').focus();
     }
   }
 
-  // Show typing indicator
-  function showTypingIndicator() {
-    const messagesContainer = document.getElementById("ai-chat-messages")
-    if (!messagesContainer) return
+  function closeChat() {
+    const container = document.getElementById('ai-chat-container');
+    container.classList.remove('open');
+    isOpen = false;
+  }
 
-    hideTypingIndicator()
+  function addMessage(content, isUser = false) {
+    const messages = document.getElementById('ai-chat-messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `ai-chat-message ${isUser ? 'user' : 'bot'}`;
+    messageDiv.textContent = content;
+    
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+  }
 
-    const typingDiv = document.createElement("div")
-    typingDiv.id = "ai-chat-typing"
-    typingDiv.className = "ai-chat-typing"
+  function showTyping() {
+    const messages = document.getElementById('ai-chat-messages');
+    const typingDiv = document.createElement('div');
+    typingDiv.id = 'ai-chat-typing-indicator';
+    typingDiv.className = 'ai-chat-typing';
     typingDiv.innerHTML = `
-      <div class="ai-chat-typing-avatar">🤖</div>
-      <div class="ai-chat-typing-content">
-        <div class="ai-chat-typing-dot"></div>
-        <div class="ai-chat-typing-dot"></div>
-        <div class="ai-chat-typing-dot"></div>
-      </div>
-    `
+      <div class="ai-chat-typing-dot"></div>
+      <div class="ai-chat-typing-dot"></div>
+      <div class="ai-chat-typing-dot"></div>
+    `;
+    
+    messages.appendChild(typingDiv);
+    messages.scrollTop = messages.scrollHeight;
+  }
 
-    messagesContainer.appendChild(typingDiv)
-
-    const container = document.getElementById("ai-chat-messages-container")
-    if (container) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth",
-      })
+  function hideTyping() {
+    const typing = document.getElementById('ai-chat-typing-indicator');
+    if (typing) {
+      typing.remove();
     }
   }
 
-  // Hide typing indicator
-  function hideTypingIndicator() {
-    const typingIndicator = document.getElementById("ai-chat-typing")
-    if (typingIndicator) {
-      typingIndicator.remove()
-    }
-  }
-
-  // Expand widget
-  function expandWidget() {
-    const widget = document.getElementById("ai-chat-bar-widget")
-    if (widget && !isExpanded) {
-      widget.classList.remove("collapsed")
-      isExpanded = true
-
-      // Focus input after animation
-      setTimeout(() => {
-        const input = document.getElementById("ai-chat-input")
-        if (input) {
-          input.focus()
-        }
-      }, 300)
-    }
-  }
-
-  // Add collapse widget function
-  function collapseWidget() {
-    const widget = document.getElementById("ai-chat-bar-widget")
-    if (widget && isExpanded) {
-      widget.classList.add("collapsed")
-      isExpanded = false
-    }
-  }
-
-  // Send message function
-  async function sendMessage(message) {
-    if (!message.trim() || isLoading) return
-
-    isLoading = true
-    const input = document.getElementById("ai-chat-input")
-    const sendButton = document.getElementById("ai-chat-send")
-    const inputContainer = document.getElementById("ai-chat-input-container")
-
-    if (!input || !sendButton || !inputContainer) return
-
-    // Expand widget if not already expanded
-    expandWidget()
-
-    // Add loading state
-    inputContainer.classList.add("loading")
-    input.disabled = true
-    sendButton.disabled = true
+  async function sendMessage() {
+    if (isLoading) return;
+    
+    const input = document.getElementById('ai-chat-input');
+    const message = input.value.trim();
+    
+    if (!message) return;
 
     // Add user message
-    addMessage(message, true)
-
-    // Clear input
-    input.value = ""
-    autoResize(input)
+    addMessage(message, true);
+    input.value = '';
+    input.style.height = 'auto';
 
     // Show typing indicator
-    showTypingIndicator()
+    showTyping();
+    isLoading = true;
 
     try {
-      const apiUrl = widgetConfig.apiUrl || "http://localhost:8000"
-      const widgetKey = widgetConfig.widgetKey || widgetConfig.botId || "default"
-
-      const response = await fetch(`${apiUrl}/widget/${widgetKey}/chat`, {
-        method: "POST",
+      const response = await fetch(`${config.apiUrl}/widget/${config.widgetKey}/chat`, {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           message: message,
-          session_id: sessionId,
-          timestamp: new Date().toISOString(),
-        }),
-      })
+          session_id: sessionId
+        })
+      });
 
       if (response.ok) {
-        const data = await response.json()
-        hideTypingIndicator()
-
-        setTimeout(() => {
-          addMessage(data.response || data.message || "I received your message!", false)
-        }, 800)
-
+        const data = await response.json();
+        hideTyping();
+        addMessage(data.response || 'Sorry, I couldn\'t process that request.');
+        
         if (data.session_id) {
-          sessionId = data.session_id
+          sessionId = data.session_id;
         }
       } else {
-        hideTypingIndicator()
-        addMessage("I'm having trouble responding right now. Please try again.", false, "error")
+        hideTyping();
+        addMessage('Sorry, I\'m having trouble right now. Please try again later.');
       }
     } catch (error) {
-      console.error("Chat error:", error)
-      hideTypingIndicator()
-      addMessage("Unable to connect. Please check your connection and try again.", false, "error")
+      console.error('Chat error:', error);
+      hideTyping();
+      addMessage('Connection error. Please check your internet and try again.');
     } finally {
-      inputContainer.classList.remove("loading")
-      input.disabled = false
-      sendButton.disabled = false
-      input.focus()
-      isLoading = false
+      isLoading = false;
     }
-  }
-
-  // Handle form submission
-  function handleSubmit(e) {
-    if (e) e.preventDefault()
-
-    const input = document.getElementById("ai-chat-input")
-    if (!input) return
-
-    const message = input.value.trim()
-    if (message) {
-      sendMessage(message)
-    }
-  }
-
-  // Auto-resize textarea
-  function autoResize(textarea) {
-    if (!textarea) return
-    textarea.style.height = "auto"
-    const newHeight = Math.min(Math.max(textarea.scrollHeight, 20), 100)
-    textarea.style.height = newHeight + "px"
-  }
-
-  // Setup event listeners
-  function setupEventListeners() {
-    const sendButton = document.getElementById("ai-chat-send")
-    const inputContainer = document.getElementById("ai-chat-input-container")
-    const input = document.getElementById("ai-chat-input")
-
-    // Send button click
-    if (sendButton) {
-      sendButton.addEventListener("click", handleSubmit)
-    }
-
-    // Click on input container when collapsed
-    if (inputContainer) {
-      inputContainer.addEventListener("click", (e) => {
-        if (!isExpanded) {
-          e.preventDefault()
-          expandWidget()
-        }
-      })
-    }
-
-    // Input handling
-    if (input) {
-      // Auto-resize on input
-      input.addEventListener("input", (e) => {
-        autoResize(e.target)
-      })
-
-      // Keyboard handling
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault()
-          handleSubmit()
-        }
-      })
-
-      // Paste handling
-      input.addEventListener("paste", () => {
-        setTimeout(() => autoResize(input), 0)
-      })
-    }
-
-    // Click outside to close
-    document.addEventListener("click", (e) => {
-      const widget = document.getElementById("ai-chat-bar-widget")
-      if (widget && isExpanded) {
-        // Check if click is outside the widget
-        if (!widget.contains(e.target)) {
-          collapseWidget()
-        }
-      }
-    })
-
-    // Keyboard shortcuts
-    document.addEventListener("keydown", (e) => {
-      // Escape to collapse
-      if (e.key === "Escape" && isExpanded) {
-        collapseWidget()
-      }
-    })
   }
 
   // Initialize widget
-  window.initChatWidget = async (config = {}) => {
-    widgetConfig = {
-      placeholderText: "Ask me anything...",
-      apiUrl: "http://localhost:8000",
-      widgetKey: "default",
-      ...config,
+  window.initChatWidget = function(userConfig) {
+    config = { ...config, ...userConfig };
+    
+    // Apply custom color if provided
+    if (config.primaryColor) {
+      document.documentElement.style.setProperty('--primary-color', config.primaryColor);
     }
+    
+    createWidget();
+  };
 
-    sessionId = generateSessionId()
-
-    // Create and inject widget HTML
-    const widgetElement = document.createElement("div")
-    widgetElement.innerHTML = createWidgetHTML()
-    document.body.appendChild(widgetElement)
-
-    // Set up event listeners
-    setupEventListeners()
-
-    // Initialize input
-    setTimeout(() => {
-      const input = document.getElementById("ai-chat-input")
-      if (input) {
-        autoResize(input)
-      }
-    }, 100)
-
-    console.log("Simple Chat Bar Widget initialized")
+  // Auto-initialize if config is available
+  if (typeof WIDGET_CONFIG !== 'undefined') {
+    window.initChatWidget(WIDGET_CONFIG);
   }
-
-  // Auto-initialize if script has data attributes
-  document.addEventListener("DOMContentLoaded", () => {
-    const script = document.querySelector('script[src*="widget-enhanced.js"]')
-    if (script) {
-      const config = {}
-      if (script.dataset.botId) config.widgetKey = script.dataset.botId
-      if (script.dataset.apiUrl) config.apiUrl = script.dataset.apiUrl
-
-      if (config.widgetKey) {
-        window.initChatWidget(config)
-      }
-    }
-  })
-
-  // Expose for debugging
-  window.chatWidget = {
-    sendMessage,
-    addMessage,
-    config: widgetConfig,
-    sessionId: () => sessionId,
-    messages: () => messages,
-  }
-})()
+})();
