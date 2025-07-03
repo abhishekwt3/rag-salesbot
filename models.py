@@ -28,6 +28,10 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # New OAuth fields
+    is_oauth_user = Column(Boolean, default=False)
+    oauth_providers = Column(Text, nullable=True)  # JSON string of {provider: provider_id}
     
     def __init__(self, **kwargs):
         if 'id' not in kwargs:

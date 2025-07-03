@@ -39,6 +39,8 @@ from simple_scraper import HybridScraper as WebScraper
 
 import httpx
 
+from oauth import oauth_router
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +52,10 @@ logger = logging.getLogger(__name__)
 init_database()
 
 app = FastAPI(title="SaaS RAG Chatbot API", version="3.0.0")
+
+#OAUTH router
+app.include_router(oauth_router)
+
 
 # CORS middleware
 app.add_middleware(

@@ -23,6 +23,7 @@ import {
   X,
   AlertCircle,
 } from "lucide-react"
+import { FaGoogle, FaApple } from "react-icons/fa"
 import Link from "next/link"
 
 // Import the new components
@@ -115,6 +116,56 @@ export default function LandingPage() {
     }
   }, [])
 
+  // Handle OAuth callback
+  useEffect(() => {
+    const handleOAuthCallback = async () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const oauthToken = urlParams.get('token')
+      const error = urlParams.get('error')
+      
+      if (error) {
+        setAuthError(decodeURIComponent(error))
+        setShowAuthModal(true)
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname)
+        return
+      }
+      
+      if (oauthToken) {
+        try {
+          // Fetch user info
+          const userResponse = await fetch(`${API_BASE}/auth/me`, {
+            headers: {
+              Authorization: `Bearer ${oauthToken}`,
+            },
+          })
+          
+          if (userResponse.ok) {
+            const userData = await userResponse.json()
+            setToken(oauthToken)
+            setUser(userData)
+            localStorage.setItem("token", oauthToken)
+            await fetchKnowledgeBases(oauthToken)
+            
+            // Clean up URL
+            window.history.replaceState({}, document.title, window.location.pathname)
+          } else {
+            setAuthError("Failed to fetch user information")
+            setShowAuthModal(true)
+          }
+        } catch (error) {
+          setAuthError("Authentication failed")
+          setShowAuthModal(true)
+        }
+        
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }
+    }
+    
+    handleOAuthCallback()
+  }, [])
+
   // Fetch user info with enhanced error handling
   const fetchUserInfo = async (authToken: string) => {
     try {
@@ -164,6 +215,33 @@ export default function LandingPage() {
       }
     } catch (error) {
       console.error("Error fetching knowledge bases:", error)
+    }
+  }
+
+  // OAuth handlers
+  const handleGoogleAuth = async () => {
+    setAuthLoading(true)
+    setAuthError("")
+    
+    try {
+      // Redirect to Google OAuth
+      window.location.href = `${API_BASE}/auth/google`
+    } catch (error) {
+      setAuthError("Failed to initialize Google authentication")
+      setAuthLoading(false)
+    }
+  }
+
+  const handleAppleAuth = async () => {
+    setAuthLoading(true)
+    setAuthError("")
+    
+    try {
+      // Redirect to Apple OAuth
+      window.location.href = `${API_BASE}/auth/apple`
+    } catch (error) {
+      setAuthError("Failed to initialize Apple authentication")
+      setAuthLoading(false)
     }
   }
 
@@ -282,7 +360,7 @@ export default function LandingPage() {
             <Bot className="h-16 w-16 text-brand-dark-cyan mx-auto mb-4 animate-pulse" />
             <div className="absolute -top-2 -right-2 w-6 h-6 bg-brand-dark-cyan rounded-full animate-ping"></div>
           </div>
-          <p className="text-brand-midnight font-medium">Loading salesbot...</p>
+          <p className="text-brand-midnight font-medium">Loading Salesdok...</p>
         </div>
       </div>
     )
@@ -312,7 +390,7 @@ export default function LandingPage() {
               <Bot className="h-8 w-8 text-brand-dark-cyan group-hover:text-brand-cerulean transition-colors" />
               <div className="absolute -top-1 -right-1 w-3 h-3 bg-brand-dark-cyan rounded-full animate-pulse"></div>
             </div>
-            <span className="ml-3 text-2xl font-display font-bold text-brand-black">salesbot</span>
+            <span className="ml-3 text-4xl font-logo font-bold text-brand-midnight">Salesdok</span>
           </Link>
 
           <nav className="ml-auto flex items-center gap-6">
@@ -485,7 +563,7 @@ export default function LandingPage() {
                         
                         {/* Branding */}
                         <div className="text-center py-2 text-xs text-gray-500">
-                          Powered by <span className="text-brand-dark-cyan font-medium">salesbot</span>
+                          Powered by <span className="text-brand-dark-cyan font-medium">Salesdok</span>
                         </div>
                       </div>
                     </div>
@@ -549,7 +627,7 @@ export default function LandingPage() {
             <div className="lg:col-span-2">
               <Link href="/" className="flex items-center gap-3 mb-4">
                 <Bot className="h-8 w-8 text-brand-dark-cyan" />
-                <span className="text-xl font-bold text-brand-black font-display">salesbot</span>
+                <span className="text-xl font-bold text-brand-black font-display">Salesdok</span>
               </Link>
               <p className="text-brand-midnight/60 max-w-md">
                 The most powerful AI sales assistant for modern businesses. Automate your customer interactions and
@@ -586,7 +664,7 @@ export default function LandingPage() {
         </div>
       </footer>
 
-      {/* Enhanced Auth Modal */}
+      {/* Enhanced Auth Modal with OAuth */}
       <Dialog open={showAuthModal} onOpenChange={setShowAuthModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -606,101 +684,141 @@ export default function LandingPage() {
               <TabsTrigger value="register">Sign Up</TabsTrigger>
             </TabsList>
 
-            <form onSubmit={handleAuth} className="space-y-4">
-              <TabsContent value="login" className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={loginForm.email}
-                    onChange={(e) => setLoginForm(prev => ({ ...prev, email: e.target.value }))}
-                    placeholder="Enter your email"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={loginForm.password}
-                    onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
-                    placeholder="Enter your password"
-                    required
-                  />
-                </div>
-              </TabsContent>
+            <div className="space-y-4">
+              {/* Social Login Buttons */}
+              <div className="space-y-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full flex items-center justify-center gap-2 h-11 hover:bg-red-50 hover:border-red-200 transition-all"
+                  onClick={handleGoogleAuth}
+                  disabled={authLoading}
+                >
+                  <FaGoogle className="h-5 w-5 text-red-500" />
+                  Continue with Google
+                </Button>
+                
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full flex items-center justify-center gap-2 h-11 bg-black text-white hover:bg-gray-800 border-gray-800 transition-all"
+                  onClick={handleAppleAuth}
+                  disabled={authLoading}
+                >
+                  <FaApple className="h-5 w-5" />
+                  Continue with Apple
+                </Button>
+              </div>
 
-              <TabsContent value="register" className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="full_name">Full Name</Label>
-                  <Input
-                    id="full_name"
-                    type="text"
-                    value={registerForm.full_name}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, full_name: e.target.value }))}
-                    placeholder="Enter your full name"
-                    required
-                  />
+              {/* Divider */}
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reg_email">Email</Label>
-                  <Input
-                    id="reg_email"
-                    type="email"
-                    value={registerForm.email}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, email: e.target.value }))}
-                    placeholder="Enter your email"
-                    required
-                  />
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">
+                    Or continue with email
+                  </span>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reg_password">Password</Label>
-                  <Input
-                    id="reg_password"
-                    type="password"
-                    value={registerForm.password}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, password: e.target.value }))}
-                    placeholder="Create a password"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirm_password">Confirm Password</Label>
-                  <Input
-                    id="confirm_password"
-                    type="password"
-                    value={registerForm.confirmPassword}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                    placeholder="Confirm your password"
-                    required
-                  />
-                </div>
-              </TabsContent>
+              </div>
 
-              {authError && (
-                <Alert>
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{authError}</AlertDescription>
-                </Alert>
-              )}
+              {/* Email/Password Form */}
+              <form onSubmit={handleAuth} className="space-y-4">
+                <TabsContent value="login" className="space-y-4 mt-0">
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={loginForm.email}
+                      onChange={(e) => setLoginForm(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="Enter your email"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="password">Password</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      value={loginForm.password}
+                      onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
+                      placeholder="Enter your password"
+                      required
+                    />
+                  </div>
+                </TabsContent>
 
-              <Button 
-                type="submit" 
-                className="w-full bg-brand-dark-cyan hover:bg-brand-cerulean text-white"
-                disabled={authLoading}
-              >
-                {authLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {authMode === "login" ? "Signing In..." : "Creating Account..."}
-                  </>
-                ) : (
-                  authMode === "login" ? "Sign In" : "Create Account"
+                <TabsContent value="register" className="space-y-4 mt-0">
+                  <div className="space-y-2">
+                    <Label htmlFor="full_name">Full Name</Label>
+                    <Input
+                      id="full_name"
+                      type="text"
+                      value={registerForm.full_name}
+                      onChange={(e) => setRegisterForm(prev => ({ ...prev, full_name: e.target.value }))}
+                      placeholder="Enter your full name"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reg_email">Email</Label>
+                    <Input
+                      id="reg_email"
+                      type="email"
+                      value={registerForm.email}
+                      onChange={(e) => setRegisterForm(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="Enter your email"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reg_password">Password</Label>
+                    <Input
+                      id="reg_password"
+                      type="password"
+                      value={registerForm.password}
+                      onChange={(e) => setRegisterForm(prev => ({ ...prev, password: e.target.value }))}
+                      placeholder="Create a password"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="confirm_password">Confirm Password</Label>
+                    <Input
+                      id="confirm_password"
+                      type="password"
+                      value={registerForm.confirmPassword}
+                      onChange={(e) => setRegisterForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                      placeholder="Confirm your password"
+                      required
+                    />
+                  </div>
+                </TabsContent>
+
+                {authError && (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{authError}</AlertDescription>
+                  </Alert>
                 )}
-              </Button>
-            </form>
+
+                <Button 
+                  type="submit" 
+                  className="w-full bg-brand-dark-cyan hover:bg-brand-cerulean text-white"
+                  disabled={authLoading}
+                >
+                  {authLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {authMode === "login" ? "Signing In..." : "Creating Account..."}
+                    </>
+                  ) : (
+                    authMode === "login" ? "Sign In" : "Create Account"
+                  )}
+                </Button>
+              </form>
+            </div>
           </Tabs>
         </DialogContent>
       </Dialog>
