@@ -24,7 +24,7 @@ class AdvancedPlaywrightScraper:
         self.browser = None
         self.context = None   
         
-    async def scrape_website(self, base_url: str, max_pages: int = 50, 
+    async def scrape_website(self, base_url: str, max_pages: int = 10, 
                            include_patterns: List[str] = None, 
                            exclude_patterns: List[str] = None) -> List[Dict]:
         """Advanced scraping with JavaScript support"""

@@ -104,15 +104,11 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
         <div className="max-w-6xl mx-auto px-6">
           <div className="flex justify-between items-center h-16">
             <Link href="/" className="flex items-center gap-3 group">
-              <div className="relative">
-                <div className="w-10 h-10 bg-brand-dark-cyan rounded-lg flex items-center justify-center group-hover:bg-brand-cerulean transition-colors">
-                  <Bot className="h-6 w-6 text-white" />
-                </div>
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse border-2 border-white"></div>
-              </div>
-              <div>
-            <span className="ml-3 text-4xl font-logo font-bold text-brand-midnight">Salesdok</span>
-              </div>
+             <div className="relative">
+              <Bot className="h-8 w-8 text-brand-dark-cyan group-hover:text-brand-cerulean transition-colors" />
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-brand-dark-cyan rounded-full animate-pulse"></div>
+            </div>
+            <span className=" text-4xl font-logo font-bold text-brand-midnight">Salesdok</span>     
             </Link>
 
             <div className="flex items-center gap-4">
