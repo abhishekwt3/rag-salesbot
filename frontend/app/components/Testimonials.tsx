@@ -29,7 +29,7 @@ export default function Testimonials() {
             </span>
           </h2>
           <p className="max-w-3xl text-lg md:text-xl text-brand-midnight/80 leading-relaxed">
-            Join thousands of companies using salesbot to increase their conversion rates and automate their sales
+            Join thousands of companies using Salesdok to increase their conversion rates and automate their sales
             process.
           </p>
         </div>
@@ -43,7 +43,7 @@ export default function Testimonials() {
                 ))}
               </div>
               <blockquote className="text-brand-midnight/80 mb-4 leading-relaxed">
-                &quot;salesbot increased our lead generation by 340% in just 2 months. The AI understands our products
+                &quot;Salesdok increased our lead generation by 340% in just 2 months. The AI understands our products
                 better than some of our sales team!&quot;
               </blockquote>
               <div className="flex items-center gap-3">

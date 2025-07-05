@@ -31,7 +31,7 @@ export default function Integration() {
                 </span>
               </h2>
               <p className="max-w-[600px] text-lg md:text-xl text-brand-midnight/80 leading-relaxed">
-                Get your AI salesbot up and running with just a few clicks. No technical expertise required, no
+                Get your AI salesdok up and running with just a few clicks. No technical expertise required, no
                 complex setup process.
               </p>
             </div>
@@ -93,7 +93,7 @@ export default function Integration() {
                 <div className="space-y-2">
                   <h3 className="font-display font-semibold text-lg text-brand-black">Embed & Launch</h3>
                   <p className="text-brand-midnight/70 leading-relaxed">
-                    Copy one line of code to your website and your AI salesbot is live, ready to convert visitors
+                    Copy one line of code to your website and your AI salesdok is live, ready to convert visitors
                     24/7.
                   </p>
                   <div className="flex items-center gap-2 mt-2">
@@ -125,13 +125,13 @@ export default function Integration() {
                 <div className="bg-brand-black/95 p-4 rounded-lg font-mono text-sm overflow-x-auto">
                   <div className="text-gray-400">{"<!-- Add to your website -->"}</div>
                   <div className="text-blue-400">{"<script"}</div>
-                  <div className="ml-2 text-green-400">src=&quot;https://salesbot.ai/embed.js&quot;</div>
+                  <div className="ml-2 text-green-400">src=&quot;https://salesdok.com/embed.js&quot;</div>
                   <div className="ml-2 text-green-400">data-bot-id=&quot;your-bot-id&quot;</div>
                   <div className="ml-2 text-yellow-400">data-theme=&quot;custom&quot;</div>
                   <div className="text-blue-400">{"></script>"}</div>
                 </div>
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-brand-midnight/60">That&apos;s it! Your salesbot is now live.</p>
+                  <p className="text-xs text-brand-midnight/60">That&apos;s it! Your Salesdok is now live.</p>
                   <Button size="sm" variant="outline" className="text-xs bg-transparent">
                     <Download className="h-3 w-3 mr-1" />
                     Copy Code

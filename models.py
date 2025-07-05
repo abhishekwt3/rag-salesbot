@@ -1,7 +1,7 @@
-# models.py - Database models and setup
+# models.py - Fixed Database models and setup
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, ForeignKey, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 
@@ -17,7 +17,7 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Database Models - SQLite compatible
+# Fixed Database Models - Clean schema without OAuth fields
 class User(Base):
     __tablename__ = "users"
     
@@ -26,20 +26,16 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # New OAuth fields
-    is_oauth_user = Column(Boolean, default=False)
-    oauth_providers = Column(Text, nullable=True)  # JSON string of {provider: provider_id}
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def __init__(self, **kwargs):
         if 'id' not in kwargs:
             kwargs['id'] = str(uuid.uuid4())
         super().__init__(**kwargs)
     
-    # Relationship
-    knowledge_bases = relationship("KnowledgeBase", back_populates="owner")
+    def __repr__(self):
+        return f"<User(id='{self.id}', email='{self.email}', full_name='{self.full_name}')>"
 
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
@@ -52,14 +48,17 @@ class KnowledgeBase(Base):
     status = Column(String, default="not_ready")  # not_ready, processing, ready, error
     total_chunks = Column(Integer, default=0)
     last_updated = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     def __init__(self, **kwargs):
         if 'id' not in kwargs:
             kwargs['id'] = str(uuid.uuid4())
         super().__init__(**kwargs)
     
-    # Relationship
+    def __repr__(self):
+        return f"<KnowledgeBase(id='{self.id}', name='{self.name}', status='{self.status}')>"
+    
+    # Relationships
     owner = relationship("User", back_populates="knowledge_bases")
 
 class ChatWidget(Base):
@@ -92,8 +91,8 @@ class ChatWidget(Base):
     last_used = Column(DateTime)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def __init__(self, **kwargs):
         if 'id' not in kwargs:
@@ -102,9 +101,12 @@ class ChatWidget(Base):
             kwargs['widget_key'] = 'widget_' + str(uuid.uuid4()).replace('-', '')[:16]
         super().__init__(**kwargs)
     
+    def __repr__(self):
+        return f"<ChatWidget(id='{self.id}', name='{self.name}', widget_key='{self.widget_key}')>"
+    
     # Relationships
-    owner = relationship("User", backref="chat_widgets")
-    knowledge_base = relationship("KnowledgeBase", backref="widgets")
+    owner = relationship("User", back_populates="chat_widgets")
+    knowledge_base = relationship("KnowledgeBase", back_populates="widgets")
 
 class WidgetConversation(Base):
     __tablename__ = "widget_conversations"
@@ -125,15 +127,24 @@ class WidgetConversation(Base):
     referrer_url = Column(String)
     
     # Timestamp
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     def __init__(self, **kwargs):
         if 'id' not in kwargs:
             kwargs['id'] = str(uuid.uuid4())
         super().__init__(**kwargs)
     
+    def __repr__(self):
+        return f"<WidgetConversation(id='{self.id}', widget_id='{self.widget_id}', session_id='{self.session_id}')>"
+    
     # Relationship
-    widget = relationship("ChatWidget", backref="conversations")
+    widget = relationship("ChatWidget", back_populates="conversations")
+
+# Set up bidirectional relationships properly
+User.knowledge_bases = relationship("KnowledgeBase", back_populates="owner", cascade="all, delete-orphan")
+User.chat_widgets = relationship("ChatWidget", back_populates="owner", cascade="all, delete-orphan")
+KnowledgeBase.widgets = relationship("ChatWidget", back_populates="knowledge_base", cascade="all, delete-orphan")
+ChatWidget.conversations = relationship("WidgetConversation", back_populates="widget", cascade="all, delete-orphan")
 
 # Database dependency
 def get_db():
@@ -146,13 +157,69 @@ def get_db():
 # Create tables
 def create_tables():
     """Create all database tables"""
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Error creating tables: {e}")
+        return False
 
 # Initialize database
 def init_database():
     """Initialize database with tables"""
-    create_tables()
-    print("✅ Database initialized successfully")
+    try:
+        create_tables()
+        
+        # Verify tables were created
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        
+        required_tables = ['users', 'knowledge_bases', 'chat_widgets', 'widget_conversations']
+        missing_tables = [table for table in required_tables if table not in tables]
+        
+        if missing_tables:
+            print(f"⚠️ Missing tables: {missing_tables}")
+            return False
+        
+        print(f"✅ Database initialized with tables: {tables}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
+        return False
+
+# Test database connection
+def test_database():
+    """Test database connection and basic operations"""
+    try:
+        db = SessionLocal()
+        
+        # Test connection
+        result = db.execute("SELECT 1")
+        
+        # Test table existence
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        
+        print(f"📊 Database connection successful. Tables: {tables}")
+        
+        db.close()
+        return True
+        
+    except Exception as e:
+        print(f"❌ Database test failed: {e}")
+        return False
 
 if __name__ == "__main__":
-    init_database()
+    print("🚀 Testing database setup...")
+    
+    if init_database():
+        if test_database():
+            print("🎉 Database setup complete and working!")
+        else:
+            print("❌ Database test failed")
+    else:
+        print("❌ Database initialization failed")

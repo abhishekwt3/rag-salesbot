@@ -3,8 +3,8 @@ import os
 import asyncio
 import logging
 import time
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
+from typing import List
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import docx
@@ -13,9 +13,10 @@ import docx
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+
+from fastapi.responses import Response , RedirectResponse
 from typing import List
 import uvicorn
 import uuid
@@ -37,9 +38,12 @@ from sqlalchemy.orm import Session
 from saas_embeddings import SaaSVectorStore
 from simple_scraper import HybridScraper as WebScraper
 
+# Import Google OAuth
+from google_oauth import GoogleOAuth, get_google_oauth_endpoints
+
+
 import httpx
 
-from oauth import oauth_router
 
 # Configure logging
 logging.basicConfig(
@@ -53,10 +57,6 @@ init_database()
 
 app = FastAPI(title="SaaS RAG Chatbot API", version="3.0.0")
 
-#OAUTH router
-app.include_router(oauth_router)
-
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -65,6 +65,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Vector store manager for multi-tenant support
 class SaaSVectorManager:
@@ -87,6 +88,10 @@ class SaaSVectorManager:
         return self.vector_stores[user_id][knowledge_base_id]
 
 vector_manager = SaaSVectorManager()
+
+# Google OAuth setup
+google_oauth = GoogleOAuth()
+oauth_endpoints = get_google_oauth_endpoints()
 
 # Auth endpoints
 @app.post("/auth/register", response_model=Token)
@@ -128,6 +133,88 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     logger.info(f"User logged in: {user_data.email}")
     
     return {"access_token": access_token, "token_type": "bearer"}
+
+# 🚀 NEW: Google OAuth endpoints
+@app.get("/auth/google")
+async def google_auth():
+    """Initiate Google OAuth flow"""
+    if not os.getenv("GOOGLE_CLIENT_ID"):
+        raise HTTPException(status_code=501, detail="Google OAuth not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.")
+    
+    auth_url = google_oauth.get_auth_url()
+    return RedirectResponse(url=auth_url)
+
+@app.get("/auth/google/callback")
+async def google_callback(
+    code: str = Query(...),
+    state: str = Query(None),
+    error: str = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Handle Google OAuth callback"""
+    
+    if error:
+        logger.error(f"Google OAuth error: {error}")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        return RedirectResponse(url=f"{frontend_url}?error=oauth_error")
+    
+    if not code:
+        raise HTTPException(status_code=400, detail="Authorization code not provided")
+    
+    try:
+        # Exchange code for token
+        token_data = await google_oauth.exchange_code_for_token(code)
+        access_token = token_data.get("access_token")
+        
+        if not access_token:
+            raise HTTPException(status_code=400, detail="No access token received")
+        
+        # Get user info from Google
+        user_info = await google_oauth.get_user_info(access_token)
+        
+        email = user_info.get("email")
+        name = user_info.get("name", "")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email not provided by Google")
+        
+        # Check if user exists
+        existing_user = db.query(User).filter(User.email == email).first()
+        
+        if existing_user:
+            # User exists, log them in
+            user = existing_user
+            logger.info(f"Existing user logged in via Google: {email}")
+        else:
+            # Create new user
+            user = User(
+                email=email,
+                full_name=name,
+                hashed_password="oauth_user",  # Placeholder for OAuth users
+            )
+            
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            logger.info(f"New user created via Google OAuth: {email}")
+        
+        # Create JWT token for our app
+        jwt_token = create_access_token(data={"sub": str(user.id)})
+        
+        # Redirect to frontend with token
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        return RedirectResponse(
+            url=f"{frontend_url}?token={jwt_token}&email={email}&name={name}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Google OAuth callback error: {e}")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        return RedirectResponse(url=f"{frontend_url}?error=oauth_failed")
+
 
 @app.get("/auth/me")
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
@@ -287,7 +374,7 @@ async def process_website_background(user_id: str, knowledge_base_id: str, confi
         if kb:
             kb.status = "ready"
             kb.total_chunks = vector_store.get_total_chunks()
-            kb.last_updated = datetime.utcnow()
+            kb.last_updated = datetime.now(timezone.utc)
             db.commit()
         
         logger.info(f"Website processing completed for KB {knowledge_base_id}")
@@ -473,8 +560,8 @@ async def update_widget(
             setattr(widget, field, ','.join(value))
         else:
             setattr(widget, field, value)
-    
-    widget.updated_at = datetime.utcnow()
+
+    widget.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(widget)
     
@@ -574,8 +661,8 @@ async def widget_chat(
         
         # Update widget analytics
         widget.total_messages += 1
-        widget.last_used = datetime.utcnow()
-        
+        widget.last_used = datetime.now(timezone.utc)
+
         db.commit()
         
         return WidgetChatResponse(
@@ -737,7 +824,7 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
                             "source_url": f"uploaded_file://{file.filename}",
                             "title": file.filename,
                             "file_type": Path(file.filename).suffix.lower(),
-                            "uploaded_at": datetime.utcnow().isoformat()
+                            "uploaded_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
                     
@@ -766,7 +853,7 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
         if kb:
             kb.status = "ready" if processed_files > 0 else "error"
             kb.total_chunks = vector_store.get_total_chunks()
-            kb.last_updated = datetime.utcnow()
+            kb.last_updated = datetime.now(timezone.utc)
             db.commit()
         
         logger.info(f"Document processing completed for KB {knowledge_base_id}: {processed_files} files, {total_chunks_added} chunks")

@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -13,10 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Bot,
   CheckCircle,
-  Star,
   ArrowRight,
   Play,
-  Headphones,
   MessageSquare,
   Sparkles,
   Loader2,
@@ -82,28 +79,7 @@ export default function LandingPage() {
   }, [])
 
   // Enhanced API call with session handling
-  const makeAuthenticatedRequest = useCallback(async (url: string, options: RequestInit = {}) => {
-    const currentToken = token || localStorage.getItem("token")
-    if (!currentToken) {
-      throw new Error("No token available")
-    }
-
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        ...options.headers,
-        'Authorization': `Bearer ${currentToken}`,
-      },
-    })
-
-    if (response.status === 401) {
-      // Session expired
-      handleSessionExpired()
-      throw new Error("Session expired")
-    }
-
-    return response
-  }, [token, handleSessionExpired])
+  // (makeAuthenticatedRequest removed because it was unused)
 
   // Check for existing token on mount
   useEffect(() => {
@@ -153,7 +129,7 @@ export default function LandingPage() {
             setAuthError("Failed to fetch user information")
             setShowAuthModal(true)
           }
-        } catch (error) {
+        } catch {
           setAuthError("Authentication failed")
           setShowAuthModal(true)
         }
@@ -226,7 +202,7 @@ export default function LandingPage() {
     try {
       // Redirect to Google OAuth
       window.location.href = `${API_BASE}/auth/google`
-    } catch (error) {
+    } catch {
       setAuthError("Failed to initialize Google authentication")
       setAuthLoading(false)
     }
@@ -239,7 +215,7 @@ export default function LandingPage() {
     try {
       // Redirect to Apple OAuth
       window.location.href = `${API_BASE}/auth/apple`
-    } catch (error) {
+    } catch {
       setAuthError("Failed to initialize Apple authentication")
       setAuthLoading(false)
     }
@@ -331,7 +307,7 @@ export default function LandingPage() {
       } else {
         setAuthError(data.detail || "Authentication failed")
       }
-    } catch (error) {
+    } catch {
       setAuthError("Network error. Please try again.")
     } finally {
       setAuthLoading(false)
@@ -346,7 +322,7 @@ export default function LandingPage() {
     setShowAuthModal(false)
   }
 
-  const handleGetStarted = (plan?: string) => {
+  const handleGetStarted = () => {
     setAuthMode("register")
     setShowAuthModal(true)
   }
@@ -654,11 +630,11 @@ export default function LandingPage() {
           <Separator className="my-8" />
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
             <p className="text-brand-midnight/60 text-sm">
-              © 2024 SalesBot. All rights reserved.
+              © 2025 Salesdok. All rights reserved.
             </p>
             <div className="flex gap-6 text-sm text-brand-midnight/60">
-              <Link href="#" className="hover:text-brand-dark-cyan transition-colors">Privacy Policy</Link>
-              <Link href="#" className="hover:text-brand-dark-cyan transition-colors">Terms of Service</Link>
+              <Link href="/privacy" className="hover:text-brand-dark-cyan transition-colors">Privacy Policy</Link>
+              <Link href="/terms" className="hover:text-brand-dark-cyan transition-colors">Terms of Service</Link>
             </div>
           </div>
         </div>

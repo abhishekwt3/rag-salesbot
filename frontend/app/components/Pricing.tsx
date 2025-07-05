@@ -50,10 +50,10 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <div className="mx-auto mb-4 p-3 bg-brand-dark-cyan/10 rounded-full w-fit">
                 <Star className="h-6 w-6 text-brand-dark-cyan" />
               </div>
-              <CardTitle className="text-2xl font-display font-bold text-brand-black">Starter</CardTitle>
+              <CardTitle className="text-2xl font-display font-bold text-brand-black">Free</CardTitle>
               <CardDescription className="text-brand-midnight/70">Perfect for small businesses</CardDescription>
               <div className="mt-4">
-                <div className="text-4xl font-display font-bold text-brand-black">$29</div>
+                <div className="text-4xl font-display font-bold text-brand-black">$0</div>
                 <div className="text-sm text-brand-midnight/60">per month</div>
               </div>
             </CardHeader>
@@ -61,7 +61,7 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">1,000 conversations/month</span>
+                  <span className="text-sm text-brand-midnight/80">100 conversations/month</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
@@ -104,7 +104,7 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <CardTitle className="text-2xl font-display font-bold text-brand-black">Pro</CardTitle>
               <CardDescription className="text-brand-midnight/70">For growing businesses</CardDescription>
               <div className="mt-4">
-                <div className="text-4xl font-display font-bold text-brand-black">$79</div>
+                <div className="text-4xl font-display font-bold text-brand-black">$25</div>
                 <div className="text-sm text-brand-midnight/60">per month</div>
               </div>
             </CardHeader>

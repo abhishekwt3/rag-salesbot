@@ -1,6 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 'use client'
-
 import { useState } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,9 +10,16 @@ import { X, Loader2 } from 'lucide-react'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
+interface User {
+  id: string
+  email: string
+  full_name: string
+  // Add other user fields as needed
+}
+
 interface AuthModalProps {
   onClose: () => void
-  onSuccess: (token: string, user: any) => void
+  onSuccess: (token: string, user: User) => void
 }
 
 interface LoginForm {
@@ -79,7 +84,7 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
       } else {
         setError(data.detail || 'Login failed')
       }
-    } catch (error) {
+    } catch {
       setError('Network error. Please try again.')
     } finally {
       setLoading(false)
@@ -137,7 +142,7 @@ export default function AuthModal({ onClose, onSuccess }: AuthModalProps) {
       } else {
         setError(data.detail || 'Registration failed')
       }
-    } catch (error) {
+    } catch {
       setError('Network error. Please try again.')
     } finally {
       setLoading(false)

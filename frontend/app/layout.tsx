@@ -30,11 +30,11 @@ const jetbrainsMono = JetBrains_Mono({
 // Metadata configuration
 export const metadata: Metadata = {
   title: {
-    default: "salesbot - AI-Powered Sales Assistant",
-    template: "%s | salesbot",
+    default: "salesdok - AI-Powered Sales Assistant",
+    template: "%s | salesdok",
   },
   description:
-    "Transform your website into a 24/7 sales machine with AI-powered conversations that convert. Deploy intelligent RAG-powered salesbots that know your products inside out.",
+    "Transform your website into a 24/7 sales machine with AI-powered conversations that convert. Deploy intelligent RAG-powered salesdoks that know your products inside out.",
   keywords: [
     "AI chatbot",
     "sales automation",
@@ -46,15 +46,15 @@ export const metadata: Metadata = {
     "lead generation",
     "customer support",
   ],
-  authors: [{ name: "salesbot Team" }],
-  creator: "salesbot",
-  publisher: "salesbot",
+  authors: [{ name: "salesdok Team" }],
+  creator: "salesdok",
+  publisher: "salesdok",
   formatDetection: {
     email: false,
     address: false,
     telephone: false,
   },
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://salesbot.ai"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://salesdok.com"),
   alternates: {
     canonical: "/",
   },
@@ -62,24 +62,24 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: "/",
-    title: "salesbot - AI-Powered Sales Assistant",
+    title: "Salesdok - AI-Powered Sales Assistant",
     description: "Transform your website into a 24/7 sales machine with AI-powered conversations that convert.",
-    siteName: "salesbot",
+    siteName: "salesdok",
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "salesbot - AI-Powered Sales Assistant",
+        alt: "salesdok - AI-Powered Sales Assistant",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "salesbot - AI-Powered Sales Assistant",
+    title: "Salesdok - AI-Powered Sales Assistant",
     description: "Transform your website into a 24/7 sales machine with AI-powered conversations that convert.",
     images: ["/og-image.png"],
-    creator: "@salesbot",
+    creator: "@salesdok",
   },
   robots: {
     index: true,
@@ -130,24 +130,23 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "salesbot",
+    title: "salesdok",
   },
-  applicationName: "salesbot",
+  applicationName: "salesdok",
   generator: "Next.js",
   abstract: "AI-powered sales assistant for websites",
   archives: [],
   assets: [],
   bookmarks: [],
-  category: "Business",
 }
 
 // Structured Data (JSON-LD)
 const structuredData = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "salesbot",
+  name: "salesdok",
   description: "AI-powered sales assistant that transforms websites into 24/7 sales machines",
-  url: "https://salesbot.ai",
+  url: "https://salesdok.ai",
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   offers: {
@@ -158,13 +157,13 @@ const structuredData = {
   },
   author: {
     "@type": "Organization",
-    name: "salesbot",
-    url: "https://salesbot.ai",
+    name: "salesdok",
+    url: "https://salesdok.ai",
   },
   publisher: {
     "@type": "Organization",
-    name: "salesbot",
-    url: "https://salesbot.ai",
+    name: "salesdok",
+    url: "https://salesdok.com",
   },
   aggregateRating: {
     "@type": "AggregateRating",
@@ -200,8 +199,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
 
         {/* DNS prefetch for performance */}
-        <link rel="dns-prefetch" href="https://api.salesbot.ai" />
-        <link rel="dns-prefetch" href="https://cdn.salesbot.ai" />
+        <link rel="dns-prefetch" href="https://api.salesdok.com" />
+        <link rel="dns-prefetch" href="https://cdn.salesdok.com" />
 
         {/* Structured Data */}
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
@@ -210,8 +209,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="salesbot" />
-        <meta name="application-name" content="salesbot" />
+        <meta name="apple-mobile-web-app-title" content="salesdok" />
+        <meta name="application-name" content="salesdok" />
         <meta name="msapplication-TileColor" content="#119da4" />
         <meta name="msapplication-config" content="/browserconfig.xml" />
         <meta name="theme-color" content="#119da4" />

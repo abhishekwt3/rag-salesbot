@@ -338,8 +338,8 @@ export default function WidgetIntegration({ token, knowledgeBases }: WidgetInteg
                                   <div className="text-gray-400 mb-1">{"<!-- Add this to your website -->"}</div>
                                   <div className="text-blue-400">{"<script>"}</div>
                                   <div className="ml-3 text-green-400">{"(function() {"}</div>
-                                  <div className="ml-6 text-green-400">var script = document.createElement('script');</div>
-                                  <div className="ml-6 text-yellow-400">script.src = '{API_BASE}/widget/{widget.widget_key}/script.js';</div>
+                                  <div className="ml-6 text-green-400">var script = document.createElement(script);</div>
+                                  <div className="ml-6 text-yellow-400">script.src = `{API_BASE}/widget/{widget.widget_key}/script.js`;</div>
                                   <div className="ml-6 text-green-400">script.async = true;</div>
                                   <div className="ml-6 text-green-400">document.head.appendChild(script);</div>
                                   <div className="ml-3 text-green-400">{"})();"}</div>
@@ -462,7 +462,7 @@ export default function WidgetIntegration({ token, knowledgeBases }: WidgetInteg
                               <label className="text-sm font-medium text-brand-black">Welcome Message</label>
                               <div className="p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <span className="text-sm text-brand-midnight/80">
-                                  "{widget.welcome_message}"
+                                  &quot;{widget.welcome_message}&quot;
                                 </span>
                               </div>
                             </div>
@@ -470,7 +470,7 @@ export default function WidgetIntegration({ token, knowledgeBases }: WidgetInteg
                               <label className="text-sm font-medium text-brand-black">Placeholder Text</label>
                               <div className="p-3 border border-gray-200 rounded-lg bg-gray-50">
                                 <span className="text-sm text-brand-midnight/80">
-                                  "{widget.placeholder_text}"
+                                  &quot;{widget.placeholder_text}&quot;
                                 </span>
                               </div>
                             </div>
@@ -479,7 +479,7 @@ export default function WidgetIntegration({ token, knowledgeBases }: WidgetInteg
                           <div className="flex items-center justify-between p-4 bg-brand-dark-cyan/5 rounded-lg">
                             <div>
                               <h5 className="text-sm font-medium text-brand-black">Show Branding</h5>
-                              <p className="text-xs text-brand-midnight/60">Display "Powered by" branding</p>
+                              <p className="text-xs text-brand-midnight/60">Display &quot;Powered by&quot; branding</p>
                             </div>
                             <Badge variant={widget.show_branding ? "default" : "secondary"}>
                               {widget.show_branding ? "Enabled" : "Disabled"}

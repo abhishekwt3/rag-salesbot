@@ -1,5 +1,4 @@
 "use client"
-
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,12 +9,9 @@ import WidgetIntegration from "./WidgetIntegration"
 import {
   Bot,
   Database,
-  FileText,
-  Shield,
   LogOut,
   MessageCircle,
   Code,
-  Settings,
   Plus,
   Activity,
   TrendingUp,
@@ -72,8 +68,8 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
   }
 
   const selectedKnowledgeBase = knowledgeBases.find((kb) => kb.id === selectedKB)
-  const readyKnowledgeBases = knowledgeBases.filter((kb) => kb.status === "ready")
-  const totalChunks = knowledgeBases.reduce((sum, kb) => sum + kb.total_chunks, 0)
+ // const readyKnowledgeBases = knowledgeBases.filter((kb) => kb.status === "ready")
+  //const totalChunks = knowledgeBases.reduce((sum, kb) => sum + kb.total_chunks, 0)
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -115,8 +111,7 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse border-2 border-white"></div>
               </div>
               <div>
-                <h1 className="text-xl font-display font-bold text-brand-black">salesbot</h1>
-                <p className="text-xs text-brand-midnight/60">AI Sales Assistant</p>
+            <span className="ml-3 text-4xl font-logo font-bold text-brand-midnight">Salesdok</span>
               </div>
             </Link>
 
@@ -163,7 +158,7 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
         </div>
 
         {/* Navigation Tabs */}
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="space-y-6">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "overview" | "knowledge" | "chat" | "widgets")} className="space-y-6">
           <div className="flex justify-center">
             <TabsList className="grid grid-cols-4 w-full max-w-2xl bg-white shadow-md border-0 p-1 h-12">
               <TabsTrigger

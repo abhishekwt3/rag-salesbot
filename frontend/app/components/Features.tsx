@@ -33,7 +33,7 @@ export default function Features() {
             </span>
           </h2>
           <p className="max-w-3xl text-lg md:text-xl text-brand-midnight/80 leading-relaxed">
-            Our RAG-powered salesbot learns from your content and provides accurate, contextual responses to convert
+            Our RAG-powered assitant learns from your content and provides accurate, contextual responses to convert
             visitors into customers automatically.
           </p>
         </div>
@@ -231,10 +231,10 @@ export default function Features() {
           <div className="grid md:grid-cols-2 gap-8 items-center">
             <div>
               <h3 className="text-2xl md:text-3xl font-display font-bold text-brand-black mb-4">
-                See salesbot in action
+                See salesdok in action
               </h3>
               <p className="text-brand-midnight/80 mb-6 leading-relaxed">
-                Watch how our AI salesbot handles real customer inquiries, provides accurate product information,
+                Watch how our AI sales assistant handles real customer inquiries, provides accurate product information,
                 and converts visitors into leads automatically.
               </p>
               <Button className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white font-semibold">
