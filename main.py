@@ -1,8 +1,6 @@
 # main.py - SaaS Multi-tenant RAG Chatbot API
 import os
-import asyncio
 import logging
-import time
 from typing import List
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,8 +23,8 @@ import uuid
 from models import User, KnowledgeBase, ChatWidget, WidgetConversation, get_db, init_database
 from auth import get_current_user, hash_password, create_access_token, authenticate_user
 from schemas import (
-    UserCreate, UserLogin, Token, UserResponse,
-    KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseStatus,
+    UserCreate, UserLogin, Token, 
+    KnowledgeBaseCreate,
     WebsiteConfig, ProcessingResponse,
     QueryRequest, QueryResponse,
     MessageResponse, ChatWidgetCreate, ChatWidgetResponse, ChatWidgetUpdate,
@@ -41,9 +39,33 @@ from simple_scraper import HybridScraper as WebScraper
 # Import Google OAuth
 from google_oauth import GoogleOAuth, get_google_oauth_endpoints
 
+from saas_embeddings import MemcacheS3VectorStore 
 
 import httpx
 
+def validate_environment():
+    """Validate required environment variables"""
+    required_vars = [
+        'MEMCACHE_HOST',
+        'AWS_ACCESS_KEY_ID', 
+        'AWS_SECRET_ACCESS_KEY',
+        'S3_EMBEDDINGS_BUCKET',
+        'GOOGLE_API_KEY'
+    ]
+    
+    missing_vars = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        logger.warning(f"Missing environment variables: {missing_vars}")
+        logger.warning("Some features may not work properly")
+    
+    return len(missing_vars) == 0
+
+# Add this after app initialization
+validate_environment()
 
 # Configure logging
 logging.basicConfig(
@@ -72,20 +94,29 @@ class SaaSVectorManager:
     def __init__(self):
         self.vector_stores = {}  # user_id -> knowledge_base_id -> vector_store
         
-    def get_vector_store(self, user_id: str, knowledge_base_id: str) -> SaaSVectorStore:
+    def get_vector_store(self, user_id: str, knowledge_base_id: str) -> MemcacheS3VectorStore:
         if user_id not in self.vector_stores:
             self.vector_stores[user_id] = {}
         
         if knowledge_base_id not in self.vector_stores[user_id]:
-            # Create user-specific storage directory
-            storage_dir = Path(f"data/{user_id}/{knowledge_base_id}")
-            storage_dir.mkdir(parents=True, exist_ok=True)
-            
-            self.vector_stores[user_id][knowledge_base_id] = SaaSVectorStore(
-                storage_dir=str(storage_dir)
+            # Create vector store with user and KB IDs (no local directory needed)
+            self.vector_stores[user_id][knowledge_base_id] = MemcacheS3VectorStore(
+                user_id=user_id,
+                knowledge_base_id=knowledge_base_id
             )
         
         return self.vector_stores[user_id][knowledge_base_id]
+    
+    def clear_vector_store(self, user_id: str, knowledge_base_id: str):
+        """Clear a specific vector store"""
+        if user_id in self.vector_stores:
+            if knowledge_base_id in self.vector_stores[user_id]:
+                # Clear the vector store data
+                self.vector_stores[user_id][knowledge_base_id].clear_data()
+                # Remove from memory
+                del self.vector_stores[user_id][knowledge_base_id]
+
+# Add environment validation at startup
 
 vector_manager = SaaSVectorManager()
 
@@ -273,6 +304,7 @@ async def list_knowledge_bases(
         for kb in knowledge_bases
     ]
 
+# Update the delete knowledge base endpoint
 @app.delete("/knowledge-bases/{knowledge_base_id}")
 async def delete_knowledge_base(
     knowledge_base_id: str,
@@ -288,17 +320,15 @@ async def delete_knowledge_base(
     if not knowledge_base:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     
-    # Clear vector store files
-    storage_dir = Path(f"data/{current_user.id}/{knowledge_base_id}")
-    if storage_dir.exists():
-        import shutil
-        shutil.rmtree(storage_dir)
+    # Clear vector store (Memcache + S3 data)
+    vector_manager.clear_vector_store(str(current_user.id), knowledge_base_id)
     
-    # Remove from memory
-    user_id = str(current_user.id)
-    if user_id in vector_manager.vector_stores:
-        if knowledge_base_id in vector_manager.vector_stores[user_id]:
-            del vector_manager.vector_stores[user_id][knowledge_base_id]
+    # Remove old local storage directory if it exists (cleanup)
+    old_storage_dir = Path(f"data/{current_user.id}/{knowledge_base_id}")
+    if old_storage_dir.exists():
+        import shutil
+        shutil.rmtree(old_storage_dir)
+        logger.info(f"Cleaned up old local storage: {old_storage_dir}")
     
     db.delete(knowledge_base)
     db.commit()
