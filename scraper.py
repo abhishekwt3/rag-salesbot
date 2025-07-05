@@ -688,9 +688,6 @@ class AdvancedPlaywrightScraper:
             return []
         
     
-    
-
-
 # Updated WebScraper class that uses the advanced Playwright scraper
 class WebScraper:
     """Enhanced WebScraper with JavaScript support"""

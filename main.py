@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import docx
+import time as time_module
 
 # Load .env file
 from dotenv import load_dotenv
@@ -648,8 +649,6 @@ async def widget_chat(
     chat_request: WidgetChatRequest,
     db: Session = Depends(get_db)
 ):
-    import time as time_module
-    from fastapi import Request
     
     start_time = time_module.time()
     
@@ -981,6 +980,7 @@ async def serve_static(file_path: str):
 @app.get("/")
 async def root():
     return {"message": "SaaS RAG Chatbot API is running", "version": "3.0.0"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

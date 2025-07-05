@@ -30,7 +30,7 @@ import Testimonials from "./components/Testimonials"
 import Dashboard from "./components/Dashboard"
 import Pricing from "./components/Pricing"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https:api.salesdok.com"
 
 interface User {
   id: string
