@@ -38,24 +38,27 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Create app directory
+# Create app directory and cache directory with proper permissions
 WORKDIR /app
+RUN mkdir -p /app/cache && chown -R appuser:appuser /app
+
+# Set cache environment variables for transformers
+ENV TRANSFORMERS_CACHE=/app/cache
+ENV HF_HOME=/app/cache
+ENV SENTENCE_TRANSFORMERS_HOME=/app/cache
 
 # Copy application code (excluding ignored folders via .dockerignore)
-COPY . .
-
-# Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+COPY --chown=appuser:appuser . .
 
 # Switch to non-root user
 USER appuser
 
-# Expose port
+# Expose port for external nginx
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Default command
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

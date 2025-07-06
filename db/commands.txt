@@ -9,7 +9,7 @@ echo "stats" | nc localhost 11211
 
 
 # 1. Build the image
-docker build -t saas-backend .
+docker build -t saas-backend:latest .
 
 # 2. Run with environment file
 docker run -d --name saas-backend -p 8000:8000 --env-file .env saas-backend
