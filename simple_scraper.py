@@ -5,7 +5,6 @@ import time
 from typing import List, Dict, Optional, Set
 from urllib.parse import urljoin, urlparse
 import re
-import json
 
 from playwright.async_api import async_playwright, Page, BrowserContext
 from bs4 import BeautifulSoup

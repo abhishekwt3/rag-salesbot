@@ -3,29 +3,25 @@
 
 import { useState } from 'react'
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { 
   Plus, 
   Globe, 
   Upload,
-  FileText,
   Loader2, 
   CheckCircle, 
   AlertCircle, 
   Clock, 
   Trash2,
-  RefreshCw
 } from 'lucide-react'
 import FileUpload from './FileUpload' // Import the FileUpload component
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.salesdok.com'
 
 interface KnowledgeBase {
   id: string
