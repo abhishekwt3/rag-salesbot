@@ -2,7 +2,7 @@
 (function() {
   let config = {
     widgetKey: 'demo',
-    apiUrl: 'http://localhost:8000',
+    apiUrl: 'https://api.salesdok.com',
     primaryColor: '#119da4',
     title: 'Chat Support',
     welcomeMessage: 'Hi! How can I help you today?',
