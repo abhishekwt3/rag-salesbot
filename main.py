@@ -187,7 +187,7 @@ async def google_callback(
     
     if error:
         logger.error(f"Google OAuth error: {error}")
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        frontend_url = os.getenv("FRONTEND_URL", "https://saledok.com")
         return RedirectResponse(url=f"{frontend_url}?error=oauth_error")
     
     if not code:
@@ -235,7 +235,7 @@ async def google_callback(
         jwt_token = create_access_token(data={"sub": str(user.id)})
         
         # Redirect to frontend with token
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        frontend_url = os.getenv("FRONTEND_URL", "https://salesdok.com")
         return RedirectResponse(
             url=f"{frontend_url}?token={jwt_token}&email={email}&name={name}"
         )
@@ -244,7 +244,7 @@ async def google_callback(
         raise
     except Exception as e:
         logger.error(f"Google OAuth callback error: {e}")
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        frontend_url = os.getenv("FRONTEND_URL", "https://salesdok.com")
         return RedirectResponse(url=f"{frontend_url}?error=oauth_failed")
 
 
@@ -722,7 +722,7 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
 (function() {{
     var WIDGET_CONFIG = {{
         widgetKey: '{widget.widget_key}',
-        apiUrl: '{os.getenv("WIDGET_API_URL", "http://localhost:8000")}',
+        apiUrl: '{os.getenv("WIDGET_API_URL", "https://api.salesdok.com")}',
         primaryColor: '{widget.primary_color}',
         position: '{widget.widget_position}',
         welcomeMessage: '{widget.welcome_message}',
