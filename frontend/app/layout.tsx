@@ -30,8 +30,8 @@ const jetbrainsMono = JetBrains_Mono({
 // Metadata configuration
 export const metadata: Metadata = {
   title: {
-    default: "salesdok - AI-Powered Sales Assistant",
-    template: "%s | salesdok",
+    default: "Salesdok - Your AI-Powered Sales Assistant",
+    template: "%s | Salesdok",
   },
   description:
     "Transform your website into a 24/7 sales machine with AI-powered conversations that convert. Deploy intelligent RAG-powered salesdoks that know your products inside out.",
@@ -146,19 +146,19 @@ const structuredData = {
   "@type": "SoftwareApplication",
   name: "salesdok",
   description: "AI-powered sales assistant that transforms websites into 24/7 sales machines",
-  url: "https://salesdok.ai",
+  url: "https://salesdok.com",
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   offers: {
     "@type": "Offer",
     price: "0",
     priceCurrency: "USD",
-    description: "Free trial available",
+    description: "Free trial avcomlable",
   },
   author: {
     "@type": "Organization",
     name: "salesdok",
-    url: "https://salesdok.ai",
+    url: "https://salesdok.com",
   },
   publisher: {
     "@type": "Organization",

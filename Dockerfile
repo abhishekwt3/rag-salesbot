@@ -1,64 +1,62 @@
-# Multi-stage build for smaller production image
+# Updated Dockerfile with proper permissions
 FROM python:3.11-slim as builder
 
-# Install system dependencies for building Python packages
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    gcc \
-    g++ \
-    libpq-dev \
-    libffi-dev \
+    build-essential gcc g++ libpq-dev libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create and activate virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements first for better layer caching
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim
 
-# Install only runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    libpq5 curl wget gnupg ca-certificates \
+    fonts-liberation libappindicator3-1 libasound2 \
+    libatk-bridge2.0-0 libatk1.0-0 libcups2 \
+    libdbus-1-3 libdrm2 libgtk-3-0 libnspr4 \
+    libnss3 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libxss1 libxtst6 xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Create non-root user for security
+# Create user and directories
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Create app directory and cache directory with proper permissions
 WORKDIR /app
-RUN mkdir -p /app/cache && chown -R appuser:appuser /app
 
-# Set cache environment variables for transformers
+# Create directories with proper permissions
+RUN mkdir -p /app/cache /app/uploads /app/tmp \
+    /home/appuser/.cache/ms-playwright && \
+    chown -R appuser:appuser /app /home/appuser
+
+# Set environment variables
 ENV TRANSFORMERS_CACHE=/app/cache
 ENV HF_HOME=/app/cache
 ENV SENTENCE_TRANSFORMERS_HOME=/app/cache
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
+ENV TMPDIR=/app/tmp
 
-# Copy application code (excluding ignored folders via .dockerignore)
+# Install Playwright browsers as root first
+RUN python -m playwright install chromium
+
 COPY --chown=appuser:appuser . .
 
-# Switch to non-root user
+# Fix Playwright permissions for appuser
+RUN chown -R appuser:appuser /root/.cache/ms-playwright || true
+
 USER appuser
 
-# Expose port for external nginx
 EXPOSE 8000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# Default command
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

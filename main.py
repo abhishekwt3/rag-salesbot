@@ -773,7 +773,7 @@ async def upload_documents(
     
     # Validate file types
     allowed_extensions = {'.txt', '.docx', '.doc'}
-    valid_files = []
+    file_data = []
     
     for file in files:
         if not file.filename:
@@ -784,20 +784,23 @@ async def upload_documents(
             continue
             
         # Check file size (max 10MB per file)
-        file.file.seek(0, 2)  # Seek to end
-        file_size = file.file.tell()
-        file.file.seek(0)  # Seek back to beginning
-        
-        if file_size > 10 * 1024 * 1024:  # 10MB limit
+        content = await file.read()
+        if len(content) > 10 * 1024 * 1024:  # 10MB limit
             continue
-            
-        valid_files.append(file)
+        
+        # Store file data for background processing
+        file_data.append({
+            'filename': file.filename,
+            'content': content,
+            'file_ext': file_ext
+        })
     
-    if not valid_files:
+    if not file_data:
         raise HTTPException(
             status_code=400, 
             detail="No valid files found. Please upload TXT or DOCX files (max 10MB each)"
         )
+
     
     # Update status to processing
     knowledge_base.status = "processing"
@@ -808,13 +811,13 @@ async def upload_documents(
         process_documents_background,
         str(current_user.id),
         knowledge_base_id,
-        valid_files
+        file_data
     )
     
-    logger.info(f"Document processing started for KB {knowledge_base_id}: {len(valid_files)} files")
+    logger.info(f"Document processing started for KB {knowledge_base_id}: {len(file_data)} files")
     
     return DocumentUploadResponse(
-        message=f"Processing {len(valid_files)} documents",
+        message=f"Processing {len(file_data)} documents",
         knowledge_base_id=knowledge_base_id,
         status="processing",
         files_processed=0,

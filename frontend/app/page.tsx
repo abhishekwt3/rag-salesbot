@@ -20,7 +20,7 @@ import {
   X,
   AlertCircle,
 } from "lucide-react"
-import { FaGoogle, FaApple } from "react-icons/fa"
+import { FaGoogle} from "react-icons/fa"
 import Link from "next/link"
 
 // Import the new components
@@ -30,7 +30,7 @@ import Testimonials from "./components/Testimonials"
 import Dashboard from "./components/Dashboard"
 import Pricing from "./components/Pricing"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https:api.salesdok.com"
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://api.salesdok.com"
 
 interface User {
   id: string
@@ -208,18 +208,18 @@ export default function LandingPage() {
     }
   }
 
-  const handleAppleAuth = async () => {
-    setAuthLoading(true)
-    setAuthError("")
+  // const handleAppleAuth = async () => {
+  //   setAuthLoading(true)
+  //   setAuthError("")
     
-    try {
-      // Redirect to Apple OAuth
-      window.location.href = `${API_BASE}/auth/apple`
-    } catch {
-      setAuthError("Failed to initialize Apple authentication")
-      setAuthLoading(false)
-    }
-  }
+  //   try {
+  //     // Redirect to Apple OAuth
+  //     window.location.href = `${API_BASE}/auth/apple`
+  //   } catch {
+  //     setAuthError("Failed to initialize Apple authentication")
+  //     setAuthLoading(false)
+  //   }
+  // }
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -670,19 +670,8 @@ export default function LandingPage() {
                   onClick={handleGoogleAuth}
                   disabled={authLoading}
                 >
-                  <FaGoogle className="h-5 w-5 text-red-500" />
+                  <FaGoogle className="h-5 w-5 text-blue-500" />
                   Continue with Google
-                </Button>
-                
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full flex items-center justify-center gap-2 h-11 bg-black text-white hover:bg-gray-800 border-gray-800 transition-all"
-                  onClick={handleAppleAuth}
-                  disabled={authLoading}
-                >
-                  <FaApple className="h-5 w-5" />
-                  Continue with Apple
                 </Button>
               </div>
 

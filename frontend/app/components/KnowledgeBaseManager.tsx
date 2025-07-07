@@ -63,7 +63,7 @@ export default function KnowledgeBaseManager({
 
   const [websiteForm, setWebsiteForm] = useState({
     url: '',
-    max_pages: 50,
+    max_pages: 10,
     single_page_mode: false
   })
 
@@ -117,7 +117,7 @@ export default function KnowledgeBaseManager({
       })
 
       if (response.ok) {
-        setWebsiteForm({ url: '', max_pages: 50, single_page_mode: false })
+        setWebsiteForm({ url: '', max_pages: 10, single_page_mode: false })
         setShowWebsiteModal(false)
         setTimeout(() => {
           onRefresh()
