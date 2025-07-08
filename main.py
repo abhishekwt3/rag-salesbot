@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi.responses import Response , RedirectResponse
-from typing import List
+from typing import List, Dict
 import uvicorn
 import uuid
 
@@ -824,38 +824,40 @@ async def upload_documents(
         total_chunks_added=0
     )
 
-async def process_documents_background(user_id: str, knowledge_base_id: str, files: List[UploadFile]):
+async def process_documents_background(user_id: str, knowledge_base_id: str, file_data: List[Dict]):  # Changed from List[UploadFile] to List[Dict]
     """Background task to process uploaded documents"""
     from models import SessionLocal
     db = SessionLocal()
     
+    # Use Docker temp directory
+    temp_dir = os.environ.get('TMPDIR', '/app/tmp')
+    
     try:
         # Get vector store for this user and knowledge base
         vector_store = vector_manager.get_vector_store(user_id, knowledge_base_id)
-        
         processed_files = 0
         total_chunks_added = 0
         
-        for file in files:
+        for file_info in file_data:  # Changed from 'file' to 'file_info'
             try:
-                # Create temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as temp_file:
-                    # Copy uploaded file content to temp file
-                    content = await file.read()
-                    temp_file.write(content)
-                    temp_file_path = temp_file.name
+                # Create temp file in proper directory
+                temp_file_path = os.path.join(temp_dir, f"upload_{os.getpid()}_{file_info['filename']}")  # Use file_info['filename']
+                
+                # Write file content (already read in main function)
+                with open(temp_file_path, 'wb') as temp_file:
+                    temp_file.write(file_info['content'])  # Use file_info['content']
                 
                 # Extract text based on file type
-                text_content = extract_text_from_file(temp_file_path, file.filename)
+                text_content = extract_text_from_file(temp_file_path, file_info['filename'])  # Use file_info['filename']
                 
                 if text_content.strip():
                     # Create document data for processing
                     document_data = {
                         "text": text_content,
                         "metadata": {
-                            "source_url": f"uploaded_file://{file.filename}",
-                            "title": file.filename,
-                            "file_type": Path(file.filename).suffix.lower(),
+                            "source_url": f"uploaded_file://{file_info['filename']}",  # Use file_info['filename']
+                            "title": file_info['filename'],  # Use file_info['filename']
+                            "file_type": file_info['file_ext'],  # Use file_info['file_ext']
                             "uploaded_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
@@ -865,15 +867,16 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
                     total_chunks_added += chunks_added
                     processed_files += 1
                     
-                    logger.info(f"Processed document {file.filename}: {chunks_added} chunks added")
+                    logger.info(f"Processed document {file_info['filename']}: {chunks_added} chunks added")  # Use file_info['filename']
                 
                 # Clean up temp file
-                os.unlink(temp_file_path)
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
                 
             except Exception as e:
-                logger.error(f"Error processing file {file.filename}: {e}")
+                logger.error(f"Error processing file {file_info['filename']}: {e}")  # Use file_info['filename']
                 # Clean up temp file if it exists
-                if 'temp_file_path' in locals():
+                if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
                     try:
                         os.unlink(temp_file_path)
                     except:
