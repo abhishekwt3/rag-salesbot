@@ -239,14 +239,19 @@ export default function Features() {
               </p>
               <Button className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white font-semibold">
                 <Play className="mr-2 h-4 w-4" />
-                Watch 2-minute Demo
+                Watch Salesdok in Action
               </Button>
             </div>
             <div className="relative">
               <div className="aspect-video bg-brand-timberwolf/50 rounded-xl flex items-center justify-center border-2 border-dashed border-brand-dark-cyan/30">
                 <div className="text-center">
-                  <Play className="h-16 w-16 text-brand-dark-cyan mx-auto mb-4" />
-                  <p className="text-brand-midnight/60 font-medium">Interactive Demo Video</p>
+                  <video
+          src="https://ik.imagekit.io/90xvn3fidvl/salesdok_demo_eVz5JtT6vO.mp4?updatedAt=1752223828802"
+          controls
+          className="w-full h-full object-cover"
+        />
+                  {/* <Play className="h-16 w-16 text-brand-dark-cyan mx-auto mb-4" />
+                  <p className="text-brand-midnight/60 font-medium">Interactive Demo Video</p> */}
                 </div>
               </div>
             </div>

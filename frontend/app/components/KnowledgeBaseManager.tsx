@@ -18,6 +18,7 @@ import {
   AlertCircle, 
   Clock, 
   Trash2,
+  RefreshCw,
 } from 'lucide-react'
 import FileUpload from './FileUpload' // Import the FileUpload component
 
@@ -55,6 +56,8 @@ export default function KnowledgeBaseManager({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [processingKB, setProcessingKB] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false) // <- ADD this line
+
 
   const [newKBForm, setNewKBForm] = useState({
     name: '',
@@ -199,11 +202,36 @@ export default function KnowledgeBaseManager({
     })
   }
 
+    // Handle manual refresh
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await onRefresh()
+    } finally {
+      // Add a small delay to show the refresh animation
+      setTimeout(() => {
+        setRefreshing(false)
+      }, 500)
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Knowledge Bases</h2>
+        <div className="flex items-center gap-2">
+          <Button 
+            size="sm" 
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </Button>
+
         <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
           <DialogTrigger asChild>
             <Button size="sm">
@@ -256,6 +284,7 @@ export default function KnowledgeBaseManager({
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* Knowledge Bases List */}

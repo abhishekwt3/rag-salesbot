@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import Script from 'next/script';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Label } from "@/components/ui/label"
@@ -436,7 +437,7 @@ export default function LandingPage() {
                 with AI
               </h1>
               <p className="mb-8 text-lg text-brand-midnight/70 lg:text-xl">
-                Deploy intelligent chatbots that understand your business, answer questions instantly, and guide prospects
+                Intelligent AI chat agents that understand your business, answer questions instantly, and guide prospects
                 through your sales funnel 24/7.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
@@ -477,7 +478,7 @@ export default function LandingPage() {
             <div className="relative">
               <div className="relative bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl p-8 shadow-2xl">
                 {/* Browser mockup */}
-                <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+                <div className="bg-white rounded-lg shadow-lg overflow-hidden py-6">
                   <div className="bg-gray-100 px-4 py-3 flex items-center gap-2">
                     <div className="flex gap-2">
                       <div className="w-3 h-3 rounded-full bg-red-400"></div>
@@ -595,6 +596,13 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* AI Chatbot Widget Script */}
+      <Script
+        id="salesdok-chatbot-script" // Unique ID for the script
+        src="https://api.salesdok.com/widget/widget_ad697e71e16e4a67/script.js"
+        strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
+      />
 
       {/* Footer */}
       <footer className="border-t border-brand-timberwolf/20 bg-white py-12">
