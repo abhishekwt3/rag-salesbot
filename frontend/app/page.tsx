@@ -373,6 +373,12 @@ export default function LandingPage() {
           <nav className="ml-auto flex items-center gap-6">
             <div className="hidden md:flex items-center gap-6">
               <Link
+                href="/blogs"
+                className="text-sm font-medium text-brand-midnight hover:text-brand-dark-cyan transition-colors"
+              >
+                Blogs
+              </Link>
+              <Link
                 href="#features"
                 className="text-sm font-medium text-brand-midnight hover:text-brand-dark-cyan transition-colors"
               >
@@ -487,7 +493,7 @@ export default function LandingPage() {
                     </div>
                     <div className="flex-1 text-center">
                       <div className="bg-white rounded px-3 py-1 text-xs text-gray-500">
-                        yourwebsite.com
+                        salesdok.com
                       </div>
                     </div>
                   </div>
@@ -501,7 +507,7 @@ export default function LandingPage() {
                     
                     {/* Widget Preview */}
                     <div className="absolute bottom-4 right-4">
-                      <div className="bg-white rounded-lg shadow-xl border max-w-xs">
+                      <div className="bg-white rounded-lg shadow-xl max-w-xs">
                         {/* Widget Header */}
                         <div className="bg-brand-dark-cyan text-white px-4 py-3 rounded-t-lg flex justify-between items-center">
                           <h4 className="font-semibold text-sm">Chat Support</h4>
@@ -519,16 +525,16 @@ export default function LandingPage() {
                             What are your pricing plans?
                           </div>
                           <div className="bg-gray-100 rounded-lg p-3 text-sm">
-                            We offer flexible pricing starting at $29/month...
+                            We offer flexible pricing starting at $25/month...
                           </div>
                         </div>
                         
                         {/* Input */}
-                        <div className="p-4 border-t flex gap-2">
+                        <div className="p-4 border-t border-gray-300 flex gap-2">
                           <input 
                             type="text" 
                             placeholder="Type your message..."
-                            className="flex-1 px-3 py-2 border rounded-full text-xs outline-none"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-full text-xs outline-none"
                             readOnly
                           />
                           <button className="bg-brand-dark-cyan text-white rounded-full p-2">
@@ -604,14 +610,14 @@ export default function LandingPage() {
         strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
       />
 
-      {/* Footer */}
+   {/* Footer */}
       <footer className="border-t border-brand-timberwolf/20 bg-white py-12">
         <div className="container px-4 lg:px-6">
           <div className="grid gap-8 lg:grid-cols-4">
             <div className="lg:col-span-2">
               <Link href="/" className="flex items-center gap-3 mb-4">
                 <Bot className="h-8 w-8 text-brand-dark-cyan" />
-                <span className="text-xl font-bold text-brand-black font-display">Salesdok</span>
+                  <span className="text-3xl font-logo font-bold text-brand-midnight">Salesdok</span>
               </Link>
               <p className="text-brand-midnight/60 max-w-md">
                 The most powerful AI sales assistant for modern businesses. Automate your customer interactions and
@@ -635,14 +641,63 @@ export default function LandingPage() {
               </ul>
             </div>
           </div>
-          <Separator className="my-8" />
+          
+          {/* Compliance Section */}
+          <div className="mt-4 pt-6 border-t border-brand-timberwolf/20">
+            <div className="flex flex-col items-center space-y-4">
+              <p className="text-sm text-brand-midnight/60 font-medium">Salesdok is compliant by SOC2, PCI DSS, uses AES-256 Encryption, and GDPR Ready</p>
+              <div className="flex flex-wrap items-center justify-center gap-6">
+                {/* SOC2 Compliance Logo */}
+                <div className="group cursor-pointer">
+                  <img
+                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-soc2_F2uA39lEs.png" 
+                    alt="SOC 2 Type II Compliant" 
+                    className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
+                  />
+                </div>
+
+                {/* PCI DSS Compliance Logo */}
+                <div className="group cursor-pointer">
+                  <img 
+                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-pci-dss_sZba9QwWd.png" 
+                    alt="PCI DSS Compliant" 
+                    className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
+                  />
+                </div>
+
+                {/* AES Encryption Logo */}
+                <div className="group cursor-pointer">
+                  <img 
+                    src="https://ik.imagekit.io/90xvn3fidvl/AES256_mha8Hcxga.webp" 
+                    alt="AES-256 Encryption" 
+                    className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
+                  />
+                </div>
+
+                {/* GDPR Compliance Logo */}
+                <div className="group cursor-pointer">
+                  <img 
+                    src="https://ik.imagekit.io/90xvn3fidvl/GDPR-ready_omM9jc7iw7.png" 
+                    alt="GDPR Ready" 
+                    className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <Separator className="my-4" />
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
             <p className="text-brand-midnight/60 text-sm">
               © 2025 Salesdok. All rights reserved.
             </p>
-            <div className="flex gap-6 text-sm text-brand-midnight/60">
-              <Link href="/privacy" className="hover:text-brand-dark-cyan transition-colors">Privacy Policy</Link>
-              <Link href="/terms" className="hover:text-brand-dark-cyan transition-colors">Terms of Service</Link>
+            <div className="flex gap-4 text-brand-midnight/60 text-sm">
+              <Link href="/privacy" className="hover:text-brand-dark-cyan transition-colors">
+                Privacy Policy
+              </Link>
+              <Link href="/terms" className="hover:text-brand-dark-cyan transition-colors">
+                Terms of Service
+              </Link>
             </div>
           </div>
         </div>
