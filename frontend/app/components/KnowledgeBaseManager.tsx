@@ -20,7 +20,7 @@ import {
   Trash2,
   RefreshCw,
 } from 'lucide-react'
-import FileUpload from './FileUpload' // Import the FileUpload component
+import FileUpload from './FileUpload'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.salesdok.com'
 
@@ -53,11 +53,11 @@ export default function KnowledgeBaseManager({
   const [showWebsiteModal, setShowWebsiteModal] = useState(false)
   const [showFileUploadModal, setShowFileUploadModal] = useState(false)
   const [selectedKBForContent, setSelectedKBForContent] = useState<string>('')
+  const [selectedKBForWebsite, setSelectedKBForWebsite] = useState<string>('') // NEW: Track which KB for website
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [processingKB, setProcessingKB] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false) // <- ADD this line
-
+  const [refreshing, setRefreshing] = useState(false)
 
   const [newKBForm, setNewKBForm] = useState({
     name: '',
@@ -99,12 +99,14 @@ export default function KnowledgeBaseManager({
     }
   }
 
-  const processWebsite = async (kbId: string) => {
-    setProcessingKB(kbId)
+  const processWebsite = async () => {
+    if (!selectedKBForWebsite) return
+    
+    setProcessingKB(selectedKBForWebsite)
     setError('')
 
     try {
-      const response = await fetch(`${API_BASE}/knowledge-bases/${kbId}/process-website`, {
+      const response = await fetch(`${API_BASE}/knowledge-bases/${selectedKBForWebsite}/process-website`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -122,6 +124,7 @@ export default function KnowledgeBaseManager({
       if (response.ok) {
         setWebsiteForm({ url: '', max_pages: 10, single_page_mode: false })
         setShowWebsiteModal(false)
+        setSelectedKBForWebsite('')
         setTimeout(() => {
           onRefresh()
         }, 1000)
@@ -202,13 +205,11 @@ export default function KnowledgeBaseManager({
     })
   }
 
-    // Handle manual refresh
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       await onRefresh()
     } finally {
-      // Add a small delay to show the refresh animation
       setTimeout(() => {
         setRefreshing(false)
       }, 500)
@@ -232,58 +233,58 @@ export default function KnowledgeBaseManager({
             {refreshing ? 'Refreshing...' : 'Refresh'}
           </Button>
 
-        <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-          <DialogTrigger asChild>
-            <Button size="sm">
-              <Plus className="h-4 w-4 mr-1" />
-              New KB
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create Knowledge Base</DialogTitle>
-              <DialogDescription>
-                Create a new knowledge base to organize your content and train your chatbot.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label className="pb-2" htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  value={newKBForm.name}
-                  onChange={(e) => setNewKBForm(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="e.g., Customer Support, Product Documentation"
-                />
+          <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+            <DialogTrigger asChild>
+              <Button size="sm">
+                <Plus className="h-4 w-4 mr-1" />
+                New KB
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create Knowledge Base</DialogTitle>
+                <DialogDescription>
+                  Create a new knowledge base to organize your content and train your chatbot.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label className="pb-2" htmlFor="name">Name</Label>
+                  <Input
+                    id="name"
+                    value={newKBForm.name}
+                    onChange={(e) => setNewKBForm(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g., Customer Support, Product Documentation"
+                  />
+                </div>
+                <div>
+                  <Label className="pb-2" htmlFor="description">Description</Label>
+                  <Textarea
+                    id="description"
+                    value={newKBForm.description}
+                    onChange={(e) => setNewKBForm(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="Brief description of what this knowledge base contains..."
+                    rows={3}
+                  />
+                </div>
+                {error && (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setShowCreateModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={createKnowledgeBase} disabled={loading || !newKBForm.name.trim()}>
+                    {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                    Create
+                  </Button>
+                </div>
               </div>
-              <div>
-                <Label className="pb-2"htmlFor="description">Description</Label>
-                <Textarea
-                  id="description"
-                  value={newKBForm.description}
-                  onChange={(e) => setNewKBForm(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Brief description of what this knowledge base contains..."
-                  rows={3}
-                />
-              </div>
-              {error && (
-                <Alert>
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowCreateModal(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={createKnowledgeBase} disabled={loading || !newKBForm.name.trim()}>
-                  {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  Create
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
@@ -337,67 +338,22 @@ export default function KnowledgeBaseManager({
                 {(kb.status === 'not_ready' || kb.status === 'ready') && (
                   <div className="mt-3 pt-2 border-t">
                     <div className="flex gap-2">
-                      {/* Website Processing */}
-                      <Dialog open={showWebsiteModal} onOpenChange={setShowWebsiteModal}>
-                        <DialogTrigger asChild>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="flex-1"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Globe className="h-3 w-3 mr-1" />
-                            Add Webpage
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Process Webpage</DialogTitle>
-                            <DialogDescription>
-                              Enter a website URL to extract and process its content for this knowledge base.
-                            </DialogDescription>
-                          </DialogHeader>
-                          <div className="space-y-4">
-                            <div>
-                              <Label className="pb-2" htmlFor="url">Website URL</Label>
-                              <Input
-                                id="url"
-                                type="url"
-                                value={websiteForm.url}
-                                onChange={(e) => setWebsiteForm(prev => ({ ...prev, url: e.target.value }))}
-                                placeholder="https://example.com"
-                              />
-                            </div>
-                            <div>
-                              <Label className="pb-2" htmlFor="max_pages">Maximum Pages to Process</Label>
-                              <Input
-                                id="max_pages"
-                                type="number"
-                                value={websiteForm.max_pages}
-                                onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 10 }))}
-                                min="1"
-                                max="10"
-                              />
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="outline" onClick={() => setShowWebsiteModal(false)}>
-                                Cancel
-                              </Button>
-                              <Button 
-                                onClick={() => processWebsite(kb.id)} 
-                                disabled={!websiteForm.url.trim() || processingKB === kb.id}
-                              >
-                                {processingKB === kb.id ? (
-                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                ) : null}
-                                Process Website
-                              </Button>
-                            </div>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
+                      {/* Website Processing Button - NO Dialog here anymore */}
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        className="flex-1"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedKBForWebsite(kb.id)
+                          setShowWebsiteModal(true)
+                        }}
+                      >
+                        <Globe className="h-3 w-3 mr-1" />
+                        Add Webpage
+                      </Button>
 
-                      {/* File Upload */}
+                      {/* File Upload Button */}
                       <Button 
                         size="sm" 
                         variant="outline" 
@@ -419,6 +375,55 @@ export default function KnowledgeBaseManager({
           ))
         )}
       </div>
+
+      {/* MOVED OUTSIDE: Single Website Processing Modal */}
+      <Dialog open={showWebsiteModal} onOpenChange={setShowWebsiteModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Process Webpage</DialogTitle>
+            <DialogDescription>
+              Enter a website URL to extract and process its content for this knowledge base.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label className="pb-2" htmlFor="url">Website URL</Label>
+              <Input
+                id="url"
+                type="url"
+                value={websiteForm.url}
+                onChange={(e) => setWebsiteForm(prev => ({ ...prev, url: e.target.value }))}
+                placeholder="https://example.com"
+              />
+            </div>
+            <div>
+              <Label className="pb-2" htmlFor="max_pages">Maximum Pages to Process</Label>
+              <Input
+                id="max_pages"
+                type="number"
+                value={websiteForm.max_pages}
+                onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 10 }))}
+                min="1"
+                max="10"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowWebsiteModal(false)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={processWebsite} 
+                disabled={!websiteForm.url.trim() || processingKB === selectedKBForWebsite}
+              >
+                {processingKB === selectedKBForWebsite ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : null}
+                Process Website
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* File Upload Modal */}
       <FileUpload
