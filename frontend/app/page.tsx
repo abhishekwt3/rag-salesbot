@@ -1,5 +1,4 @@
 "use client"
-
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -30,6 +29,7 @@ import Integration from "./components/Integration"
 import Testimonials from "./components/Testimonials"
 import Dashboard from "./components/Dashboard"
 import Pricing from "./components/Pricing"
+import YouTubeModal from "./components/YouTubeModal"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://api.salesdok.com"
 
@@ -66,6 +66,10 @@ export default function LandingPage() {
     full_name: "", 
     confirmPassword: "" 
   })
+
+    // YouTube Modal State
+  const [showVideoModal, setShowVideoModal] = useState(false)
+  const videoId = "RzSYv7bkrpc" // Extracted from https://youtu.be/RzSYv7bkrpc?si=rCiq0vkZHtCrpw7s
 
   // Enhanced session expiration handler
   const handleSessionExpired = useCallback(() => {
@@ -209,24 +213,10 @@ export default function LandingPage() {
     }
   }
 
-  // const handleAppleAuth = async () => {
-  //   setAuthLoading(true)
-  //   setAuthError("")
-    
-  //   try {
-  //     // Redirect to Apple OAuth
-  //     window.location.href = `${API_BASE}/auth/apple`
-  //   } catch {
-  //     setAuthError("Failed to initialize Apple authentication")
-  //     setAuthLoading(false)
-  //   }
-  // }
-
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault()
     setAuthLoading(true)
     setAuthError("")
-
     try {
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register"
       const formData = authMode === "login" ? loginForm : registerForm
@@ -327,6 +317,13 @@ export default function LandingPage() {
     setAuthMode("register")
     setShowAuthModal(true)
   }
+
+
+   // Function to open video modal
+  const handleWatchDemo = () => {
+    setShowVideoModal(true)
+  }
+
 
   // Enhanced loading state
   if (loading) {
@@ -458,6 +455,7 @@ export default function LandingPage() {
                 <Button
                   variant="outline"
                   size="lg"
+                  onClick={handleWatchDemo}
                   className="border-brand-dark-cyan text-brand-dark-cyan hover:bg-brand-dark-cyan hover:text-white px-8 py-3 text-lg font-semibold bg-transparent"
                 >
                   <Play className="mr-2 h-5 w-5" />

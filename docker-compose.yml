@@ -43,7 +43,7 @@ services:
     container_name: saas-memcache
     expose:
       - "11211"
-    command: memcached -m 512 -v
+    command: memcached -m 256 -v
     restart: unless-stopped
     networks:
       - saas-network
