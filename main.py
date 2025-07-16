@@ -985,7 +985,7 @@ async def serve_static(file_path: str):
 # Health check
 @app.get("/")
 async def root():
-    return {"message": "SaaS RAG Chatbot API is running", "version": "3.0.0"}
+    return {"message": "Salesdok Assistant API is running", "version": "3.0.0"}
 
 
 if __name__ == "__main__":

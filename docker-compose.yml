@@ -1,5 +1,4 @@
 # Updated docker-compose.yml
-version: '3.8'
 
 services:
   backend:
@@ -8,9 +7,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_HOST=database-1.c1uuqqac2050.ap-south-1.rds.amazonaws.com
+      - DB_HOST=maindock.crao4a2ccsjm.ap-south-1.rds.amazonaws.com
       - DB_PORT=5432
-      - DB_NAME=sldk
+      - DB_NAME=salesdok
       - DB_USER=postgres
       - DB_PASSWORD=${DB_PASSWORD}
       - MEMCACHE_HOST=memcache
