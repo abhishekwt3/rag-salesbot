@@ -3,6 +3,8 @@ import "./globals.css"
 import type { Metadata } from "next"
 import { Inter, Poppins, JetBrains_Mono } from "next/font/google"
 import { cn } from "@/lib/utils"
+import { GoogleAnalytics } from '@next/third-parties/google'
+
 
 // Font configurations
 const inter = Inter({
@@ -153,7 +155,7 @@ const structuredData = {
     "@type": "Offer",
     price: "0",
     priceCurrency: "USD",
-    description: "Free trial avcomlable",
+    description: "Free trial available",
   },
   author: {
     "@type": "Organization",
@@ -220,6 +222,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <meta httpEquiv="X-Frame-Options" content="DENY" />
         <meta httpEquiv="X-XSS-Protection" content="1; mode=block" />
         <meta httpEquiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
+        <meta httpEquiv="Content-Security-Policy" content="frame-src 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self';" />
 
         {/* Performance hints */}
         <link rel="preload" href="/fonts/inter-var.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
@@ -272,83 +275,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
           {children}
         </div>
 
-        {/* Analytics Scripts */}
-        {process.env.NODE_ENV === "production" && (
-          <>
-            {/* Google Analytics */}
-            {process.env.NEXT_PUBLIC_GA_ID && (
-              <>
-                <script async src={`https://www.googletagmanager.com/gtag/js?id=${process.env.NEXT_PUBLIC_GA_ID}`} />
-                <script
-                  dangerouslySetInnerHTML={{
-                    __html: `
-                      window.dataLayer = window.dataLayer || [];
-                      function gtag(){dataLayer.push(arguments);}
-                      gtag('js', new Date());
-                      gtag('config', '${process.env.NEXT_PUBLIC_GA_ID}', {
-                        page_title: document.title,
-                        page_location: window.location.href,
-                      });
-                    `,
-                  }}
-                />
-              </>
-            )}
+        <GoogleAnalytics gaId="G-NWVD7BS8H8" />
 
-            {/* Hotjar */}
-            {process.env.NEXT_PUBLIC_HOTJAR_ID && (
-              <script
-                dangerouslySetInnerHTML={{
-                  __html: `
-                    (function(h,o,t,j,a,r){
-                      h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};
-                      h._hjSettings={hjid:${process.env.NEXT_PUBLIC_HOTJAR_ID},hjsv:6};
-                      a=o.getElementsByTagName('head')[0];
-                      r=o.createElement('script');r.async=1;
-                      r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;
-                      a.appendChild(r);
-                    })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');
-                  `,
-                }}
-              />
-            )}
-
-            {/* Intercom or other chat widgets */}
-            {process.env.NEXT_PUBLIC_INTERCOM_APP_ID && (
-              <script
-                dangerouslySetInnerHTML={{
-                  __html: `
-                    window.intercomSettings = {
-                      app_id: "${process.env.NEXT_PUBLIC_INTERCOM_APP_ID}"
-                    };
-                    (function(){var w=window;var ic=w.Intercom;if(typeof ic==="function"){ic('reattach_activator');ic('update',w.intercomSettings);}else{var d=document;var i=function(){i.c(arguments);};i.q=[];i.c=function(args){i.q.push(args);};w.Intercom=i;var l=function(){var s=d.createElement('script');s.type='text/javascript';s.async=true;s.src='https://widget.intercom.io/widget/${process.env.NEXT_PUBLIC_INTERCOM_APP_ID}';var x=d.getElementsByTagName('script')[0];x.parentNode.insertBefore(s,x);};if(document.readyState==='complete'){l();}else if(w.attachEvent){w.attachEvent('onload',l);}else{w.addEventListener('load',l,false);}}})();
-                  `,
-                }}
-              />
-            )}
-          </>
-        )}
-
-        {/* Service Worker Registration */}
-        {process.env.NODE_ENV === "production" && (
-          <script
-            dangerouslySetInnerHTML={{
-              __html: `
-                if ('serviceWorker' in navigator) {
-                  window.addEventListener('load', function() {
-                    navigator.serviceWorker.register('/sw.js')
-                      .then(function(registration) {
-                        console.log('SW registered: ', registration);
-                      })
-                      .catch(function(registrationError) {
-                        console.log('SW registration failed: ', registrationError);
-                      });
-                  });
-                }
-              `,
-            }}
-          />
-        )}
 
         {/* Error Boundary Script */}
         <script

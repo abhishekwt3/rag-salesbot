@@ -71,6 +71,13 @@ export default function LandingPage() {
   const [showVideoModal, setShowVideoModal] = useState(false)
   const videoId = "RzSYv7bkrpc" // Extracted from https://youtu.be/RzSYv7bkrpc?si=rCiq0vkZHtCrpw7s
 
+  {/* YouTube Modal */}
+
+
+  const handleWatchDemo = () => {
+    setShowVideoModal(true)
+  }
+
   // Enhanced session expiration handler
   const handleSessionExpired = useCallback(() => {
     console.log("Session expired, redirecting to homepage")
@@ -320,9 +327,7 @@ export default function LandingPage() {
 
 
    // Function to open video modal
-  const handleWatchDemo = () => {
-    setShowVideoModal(true)
-  }
+
 
 
   // Enhanced loading state
@@ -449,7 +454,7 @@ export default function LandingPage() {
                   onClick={() => handleGetStarted()}
                   className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white px-8 py-3 text-lg font-semibold shadow-lg hover:shadow-xl transition-all"
                 >
-                  Start Free Trial
+                  Get Started
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
                 <Button
@@ -601,10 +606,17 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <YouTubeModal
+  isOpen={showVideoModal}
+  onClose={() => setShowVideoModal(false)}
+  videoId={videoId}
+  title="Salesdok Demo Video"
+/>
+
       {/* AI Chatbot Widget Script */}
       <Script
         id="salesdok-chatbot-script" // Unique ID for the script
-        src="https://api.salesdok.com/widget/widget_ad697e71e16e4a67/script.js"
+        src="https://api.salesdok.com/widget/widget_6fc92b09b904462f/script.js"
         strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
       />
 

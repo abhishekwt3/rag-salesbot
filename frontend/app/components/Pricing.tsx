@@ -84,9 +84,9 @@ export default function Pricing({ onGetStarted }: PricingProps) {
                 className="w-full mt-6 bg-brand-dark-cyan hover:bg-brand-cerulean text-white font-semibold"
                 onClick={() => handlePlanSelect('starter')}
               >
-                Start Free Trial
+                Start Now
               </Button>
-              <p className="text-xs text-brand-midnight/60 text-center">14-day free trial included</p>
+              <p className="text-xs text-brand-midnight/60 text-center">Free Forever</p>
             </CardContent>
           </Card>
 
@@ -143,7 +143,7 @@ export default function Pricing({ onGetStarted }: PricingProps) {
                 className="w-full mt-6 bg-brand-cerulean hover:bg-brand-midnight text-white font-semibold"
                 onClick={() => handlePlanSelect('pro')}
               >
-                Start Free Trial
+                Get Started
               </Button>
               <p className="text-xs text-brand-midnight/60 text-center">14-day free trial included</p>
             </CardContent>
