@@ -53,7 +53,7 @@
           
           ${config.showBranding ? `
             <div class="ai-chat-branding">
-              Powered by <a href="#" target="_blank">salesbot</a>
+              Powered by <a href="https://salesdok.com" target="_blank">salesdok</a>
             </div>
           ` : ''}
         </div>

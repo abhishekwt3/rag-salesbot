@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 # Google OAuth settings
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.salesdock.com/auth/google/callback")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://salesdock.com")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # Google OAuth URLs
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth"

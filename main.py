@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi.responses import Response , RedirectResponse
-from typing import List
+from typing import List, Dict
 import uvicorn
 import uuid
 
@@ -187,7 +187,7 @@ async def google_callback(
     
     if error:
         logger.error(f"Google OAuth error: {error}")
-        frontend_url = os.getenv("FRONTEND_URL", "https://saledok.com")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         return RedirectResponse(url=f"{frontend_url}?error=oauth_error")
     
     if not code:
@@ -235,7 +235,7 @@ async def google_callback(
         jwt_token = create_access_token(data={"sub": str(user.id)})
         
         # Redirect to frontend with token
-        frontend_url = os.getenv("FRONTEND_URL", "https://salesdok.com")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         return RedirectResponse(
             url=f"{frontend_url}?token={jwt_token}&email={email}&name={name}"
         )
@@ -244,7 +244,7 @@ async def google_callback(
         raise
     except Exception as e:
         logger.error(f"Google OAuth callback error: {e}")
-        frontend_url = os.getenv("FRONTEND_URL", "https://salesdok.com")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         return RedirectResponse(url=f"{frontend_url}?error=oauth_failed")
 
 
@@ -722,7 +722,7 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
 (function() {{
     var WIDGET_CONFIG = {{
         widgetKey: '{widget.widget_key}',
-        apiUrl: '{os.getenv("WIDGET_API_URL", "https://api.salesdok.com")}',
+        apiUrl: '{os.getenv("WIDGET_API_URL", "http://localhost:8000")}',
         primaryColor: '{widget.primary_color}',
         position: '{widget.widget_position}',
         welcomeMessage: '{widget.welcome_message}',
@@ -773,7 +773,7 @@ async def upload_documents(
     
     # Validate file types
     allowed_extensions = {'.txt', '.docx', '.doc'}
-    valid_files = []
+    file_data = []
     
     for file in files:
         if not file.filename:
@@ -784,20 +784,23 @@ async def upload_documents(
             continue
             
         # Check file size (max 10MB per file)
-        file.file.seek(0, 2)  # Seek to end
-        file_size = file.file.tell()
-        file.file.seek(0)  # Seek back to beginning
-        
-        if file_size > 10 * 1024 * 1024:  # 10MB limit
+        content = await file.read()
+        if len(content) > 10 * 1024 * 1024:  # 10MB limit
             continue
-            
-        valid_files.append(file)
+        
+        # Store file data for background processing
+        file_data.append({
+            'filename': file.filename,
+            'content': content,
+            'file_ext': file_ext
+        })
     
-    if not valid_files:
+    if not file_data:
         raise HTTPException(
             status_code=400, 
             detail="No valid files found. Please upload TXT or DOCX files (max 10MB each)"
         )
+
     
     # Update status to processing
     knowledge_base.status = "processing"
@@ -808,51 +811,53 @@ async def upload_documents(
         process_documents_background,
         str(current_user.id),
         knowledge_base_id,
-        valid_files
+        file_data
     )
     
-    logger.info(f"Document processing started for KB {knowledge_base_id}: {len(valid_files)} files")
+    logger.info(f"Document processing started for KB {knowledge_base_id}: {len(file_data)} files")
     
     return DocumentUploadResponse(
-        message=f"Processing {len(valid_files)} documents",
+        message=f"Processing {len(file_data)} documents",
         knowledge_base_id=knowledge_base_id,
         status="processing",
         files_processed=0,
         total_chunks_added=0
     )
 
-async def process_documents_background(user_id: str, knowledge_base_id: str, files: List[UploadFile]):
+async def process_documents_background(user_id: str, knowledge_base_id: str, file_data: List[Dict]):  # Changed from List[UploadFile] to List[Dict]
     """Background task to process uploaded documents"""
     from models import SessionLocal
     db = SessionLocal()
     
+    # Use Docker temp directory
+    temp_dir = os.environ.get('TMPDIR', '/app/tmp')
+    
     try:
         # Get vector store for this user and knowledge base
         vector_store = vector_manager.get_vector_store(user_id, knowledge_base_id)
-        
         processed_files = 0
         total_chunks_added = 0
         
-        for file in files:
+        for file_info in file_data:  # Changed from 'file' to 'file_info'
             try:
-                # Create temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as temp_file:
-                    # Copy uploaded file content to temp file
-                    content = await file.read()
-                    temp_file.write(content)
-                    temp_file_path = temp_file.name
+                # Create temp file in proper directory
+                temp_file_path = os.path.join(temp_dir, f"upload_{os.getpid()}_{file_info['filename']}")  # Use file_info['filename']
+                
+                # Write file content (already read in main function)
+                with open(temp_file_path, 'wb') as temp_file:
+                    temp_file.write(file_info['content'])  # Use file_info['content']
                 
                 # Extract text based on file type
-                text_content = extract_text_from_file(temp_file_path, file.filename)
+                text_content = extract_text_from_file(temp_file_path, file_info['filename'])  # Use file_info['filename']
                 
                 if text_content.strip():
                     # Create document data for processing
                     document_data = {
                         "text": text_content,
                         "metadata": {
-                            "source_url": f"uploaded_file://{file.filename}",
-                            "title": file.filename,
-                            "file_type": Path(file.filename).suffix.lower(),
+                            "source_url": f"uploaded_file://{file_info['filename']}",  # Use file_info['filename']
+                            "title": file_info['filename'],  # Use file_info['filename']
+                            "file_type": file_info['file_ext'],  # Use file_info['file_ext']
                             "uploaded_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
@@ -862,15 +867,16 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
                     total_chunks_added += chunks_added
                     processed_files += 1
                     
-                    logger.info(f"Processed document {file.filename}: {chunks_added} chunks added")
+                    logger.info(f"Processed document {file_info['filename']}: {chunks_added} chunks added")  # Use file_info['filename']
                 
                 # Clean up temp file
-                os.unlink(temp_file_path)
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
                 
             except Exception as e:
-                logger.error(f"Error processing file {file.filename}: {e}")
+                logger.error(f"Error processing file {file_info['filename']}: {e}")  # Use file_info['filename']
                 # Clean up temp file if it exists
-                if 'temp_file_path' in locals():
+                if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
                     try:
                         os.unlink(temp_file_path)
                     except:
@@ -979,7 +985,7 @@ async def serve_static(file_path: str):
 # Health check
 @app.get("/")
 async def root():
-    return {"message": "SaaS RAG Chatbot API is running", "version": "3.0.0"}
+    return {"message": "Salesdok Assistant API is running", "version": "3.0.0"}
 
 
 if __name__ == "__main__":

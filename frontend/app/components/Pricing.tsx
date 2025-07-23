@@ -61,15 +61,15 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">100 conversations/month</span>
+                  <span className="text-sm text-brand-midnight/80">300 conversations/month</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">1 knowledge base</span>
+                  <span className="text-sm text-brand-midnight/80">Unlimited knowledge bases</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">Basic analytics</span>
+                  <span className="text-sm text-brand-midnight/80">150 data chunks limit</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
@@ -112,15 +112,15 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">10,000 conversations/month</span>
+                  <span className="text-sm text-brand-midnight/80">5,000 conversations/month</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">5 knowledge bases</span>
+                  <span className="text-sm text-brand-midnight/80">30 knowledge bases</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">Advanced analytics</span>
+                  <span className="text-sm text-brand-midnight/80">750 data chunks limit</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
@@ -158,8 +158,8 @@ export default function Pricing({ onGetStarted }: PricingProps) {
               <CardTitle className="text-2xl font-display font-bold text-brand-black">Enterprise</CardTitle>
               <CardDescription className="text-brand-midnight/70">For large organizations</CardDescription>
               <div className="mt-4">
-                <div className="text-4xl font-display font-bold text-brand-black">Custom</div>
-                <div className="text-sm text-brand-midnight/60">contact sales</div>
+                <div className="text-4xl font-display font-bold text-brand-black">$200</div>
+                <div className="text-sm text-brand-midnight/60">per month</div>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -174,11 +174,11 @@ export default function Pricing({ onGetStarted }: PricingProps) {
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">Enterprise analytics</span>
+                  <span className="text-sm text-brand-midnight/80">Unlimited data chunks</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-brand-midnight/80">24/7 dedicated support</span>
+                  <span className="text-sm text-brand-midnight/80">Dedicated support</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />

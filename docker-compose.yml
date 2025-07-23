@@ -1,43 +1,48 @@
-version: '3.8'
+# Updated docker-compose.yml
 
 services:
-  # Backend API - exposed on port 8000 for external nginx
   backend:
     build: .
     container_name: saas-backend
     ports:
-      - "8000:8000"  # Exposed for external nginx proxy
+      - "8000:8000"
     environment:
-      - DB_HOST=database-1.c1uuqqac2050.ap-south-1.rds.amazonaws.com
+      - DB_HOST=maindock.crao4a2ccsjm.ap-south-1.rds.amazonaws.com
       - DB_PORT=5432
-      - DB_NAME=sldk
+      - DB_NAME=salesdok
       - DB_USER=postgres
       - DB_PASSWORD=${DB_PASSWORD}
       - MEMCACHE_HOST=memcache
       - MEMCACHE_PORT=11211
       - TRANSFORMERS_CACHE=/app/cache
       - HF_HOME=/app/cache
+      - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - S3_EMBEDDINGS_BUCKET=storeofvectors
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
+      # Fix temp directory path
+      - TMPDIR=/app/tmp
     volumes:
       - transformers_cache:/app/cache
+      - playwright_cache:/home/appuser/.cache/ms-playwright
+      # Add volumes for file uploads and temp storage
+      - upload_storage:/app/uploads
+      - temp_storage:/app/tmp
     depends_on:
       - memcache
     restart: unless-stopped
     networks:
       - saas-network
 
-  # Memcache service (internal only)
   memcache:
     image: memcached:1.6-alpine
     container_name: saas-memcache
     expose:
-      - "11211"  # Only accessible to other containers
-    command: memcached -m 512 -v
+      - "11211"
+    command: memcached -m 256 -v
     restart: unless-stopped
     networks:
       - saas-network
@@ -48,3 +53,6 @@ networks:
 
 volumes:
   transformers_cache:
+  playwright_cache:
+  upload_storage:    # For uploaded files
+  temp_storage:      # For temporary processing
