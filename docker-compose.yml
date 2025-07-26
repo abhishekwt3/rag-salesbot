@@ -19,7 +19,7 @@ services:
       - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - S3_EMBEDDINGS_BUCKET=storeofvectors
+      - S3_EMBEDDINGS_BUCKET=vectorware
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
