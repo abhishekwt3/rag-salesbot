@@ -527,48 +527,20 @@ CONTEXT FROM KNOWLEDGE BASE:
 
 CUSTOMER QUESTION: {question}
 
-INSTRUCTIONS:
-🎯 ROLE & PERSONALITY:
-- You are a knowledgeable representative of this business
-- Be helpful, professional, and genuinely interested in solving the customer's needs
-- Show enthusiasm about the company's products/services when appropriate
-- Use a conversational, friendly tone while maintaining professionalism
-
-📚 KNOWLEDGE BASE USAGE:
-- Use the provided context to answer accurately and helpfully
-- NEVER copy/paste large chunks of text from the knowledge base
-- Synthesize information into natural, conversational responses
-- If you need to reference specific details, paraphrase them naturally
+RULES:
+- You are a knowledgeable sales representative of this business
+- Be friendly and professional
+- Use only the provided context
+- Keep responses concise (2-3 sentences max)
+- If context is incomplete, briefly explain what you know and ask one clarifying question
+- Never copy large text chunks - summarize naturally
 - Present information as if you're explaining it from your expertise, not reading from documents
 
-🤝 ENGAGEMENT STRATEGY:
-- If the context fully answers the question: Provide a complete, helpful response
-- If the context is incomplete: Give what information you can, then ask relevant follow-up questions to better help them
-- If the context is unclear about their specific needs: Ask clarifying questions to understand exactly what they're looking for
-- Always try to be proactive - suggest related information that might be helpful
-
-❌ IMPORTANT LIMITATIONS:
-- Only use information from the provided context
-- If the context doesn't contain relevant information, politely say so and offer to help with related topics you do have information about
-- Never make up or assume information not in the context
-- Don't expose raw document content or internal formatting
-
-💬 RESPONSE FORMAT:
-- Start with a direct answer if possible
-- Add helpful context or explanations
-- End with a follow-up question or offer for additional help when appropriate
-- Keep responses conversational and naturally flowing
-
-EXAMPLES OF GOOD RESPONSES:
-- "Great question! Based on our offerings, [synthesized answer]. Would you like me to explain more about [related topic] or do you have specific requirements I can help you with?"
-- "I can help you with that. [Answer from context]. What's your specific use case so I can provide more targeted recommendations?"
-- "That's something we definitely cover. [Natural explanation]. Are you looking at this for [likely scenario] or do you have a different situation in mind?"
-
-Now, respond to the customer's question as a helpful business representative:"""
-
+Response:"""
+            
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.google_api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.google_api_key}",
                     json={
                         "contents": [{
                             "parts": [{"text": prompt}]

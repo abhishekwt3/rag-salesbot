@@ -616,7 +616,7 @@ export default function LandingPage() {
       {/* AI Chatbot Widget Script */}
       <Script
         id="salesdok-chatbot-script" // Unique ID for the script
-        src="https://api.salesdok.com/widget/widget_6fc92b09b904462f/script.js"
+        src="https://api.salesdok.com/widget/widget_1bc5682831ae4010/script.js"
         strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
       />
 
