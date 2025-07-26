@@ -510,36 +510,75 @@ class MemcacheS3VectorStore:
             })
         
         # Generate response using Gemini
+
         if not self.google_api_key:
             return {
-                "answer": "LLM service not available. Here's the most relevant content: " + context_results[0]['text'],
+                "answer": "I'm here to help, but I'm having trouble accessing our knowledge base right now. Let me try to assist you with the information I have available: " + context_results[0]['text'][:200] + "... Would you like me to try again or can I help you with something else?",
                 "sources": sources,
                 "confidence": context_results[0]['relevance_score'] if context_results else 0.0
             }
-        
-        try:
-            prompt = f"""Based on the following context, answer the user's question accurately and concisely.
 
-Context:
+        try:
+            # Improved prompt that makes the AI act as a business representative
+            prompt = f"""You are an intelligent AI assistant representing this business and helping their customers. You have access to the company's knowledge base and should respond as a helpful, professional representative of this business.
+
+CONTEXT FROM KNOWLEDGE BASE:
 {context_text}
 
-Question: {question}
+CUSTOMER QUESTION: {question}
 
-Instructions:
+INSTRUCTIONS:
+🎯 ROLE & PERSONALITY:
+- You are a knowledgeable representative of this business
+- Be helpful, professional, and genuinely interested in solving the customer's needs
+- Show enthusiasm about the company's products/services when appropriate
+- Use a conversational, friendly tone while maintaining professionalism
+
+📚 KNOWLEDGE BASE USAGE:
+- Use the provided context to answer accurately and helpfully
+- NEVER copy/paste large chunks of text from the knowledge base
+- Synthesize information into natural, conversational responses
+- If you need to reference specific details, paraphrase them naturally
+- Present information as if you're explaining it from your expertise, not reading from documents
+
+🤝 ENGAGEMENT STRATEGY:
+- If the context fully answers the question: Provide a complete, helpful response
+- If the context is incomplete: Give what information you can, then ask relevant follow-up questions to better help them
+- If the context is unclear about their specific needs: Ask clarifying questions to understand exactly what they're looking for
+- Always try to be proactive - suggest related information that might be helpful
+
+❌ IMPORTANT LIMITATIONS:
 - Only use information from the provided context
-- If the context doesn't contain relevant information, say so
-- Provide a clear, helpful answer
-- Don't make up information
+- If the context doesn't contain relevant information, politely say so and offer to help with related topics you do have information about
+- Never make up or assume information not in the context
+- Don't expose raw document content or internal formatting
 
-Answer:"""
+💬 RESPONSE FORMAT:
+- Start with a direct answer if possible
+- Add helpful context or explanations
+- End with a follow-up question or offer for additional help when appropriate
+- Keep responses conversational and naturally flowing
+
+EXAMPLES OF GOOD RESPONSES:
+- "Great question! Based on our offerings, [synthesized answer]. Would you like me to explain more about [related topic] or do you have specific requirements I can help you with?"
+- "I can help you with that. [Answer from context]. What's your specific use case so I can provide more targeted recommendations?"
+- "That's something we definitely cover. [Natural explanation]. Are you looking at this for [likely scenario] or do you have a different situation in mind?"
+
+Now, respond to the customer's question as a helpful business representative:"""
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.google_api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.google_api_key}",
                     json={
                         "contents": [{
                             "parts": [{"text": prompt}]
-                        }]
+                        }],
+                        "generationConfig": {
+                            "temperature": 0.7,  # Slightly more creative for conversational tone
+                            "topP": 0.8,
+                            "topK": 40,
+                            "maxOutputTokens": 1024,
+                        }
                     },
                     timeout=30.0
                 )
@@ -559,15 +598,23 @@ Answer:"""
                 else:
                     logger.error(f"Gemini API error: {response.status_code} - {response.text}")
                     return {
-                        "answer": f"I found relevant information in your knowledge base, but I'm having trouble generating a response right now. Here's what I found: {context_results[0]['text'][:500]}...",
+                        "answer": "I'm here to help! I found some relevant information in our knowledge base, but I'm having a small technical issue right now. Let me share what I can: " + context_results[0]['text'][:300] + "... Can you let me know more specifically what you're looking for so I can better assist you?",
                         "sources": sources,
                         "confidence": context_results[0]['relevance_score']
                     }
                     
         except Exception as e:
             logger.error(f"Error calling Gemini API: {e}")
+            fallback_message = "I'm experiencing a technical issue right now, but I'm here to help! "
+            
+            if context_results:
+                # Provide a more conversational fallback with available context
+                fallback_message += f"I can see we have information about your question. {context_results[0]['text'][:200]}... Would you like to try asking your question differently, or is there something specific I can help clarify?"
+            else:
+                fallback_message += "Could you please rephrase your question or let me know more details about what you're looking for? I want to make sure I give you the most helpful information."
+            
             return {
-                "answer": f"I found relevant information about your question, but I'm having trouble generating a response right now. Here's what I found in your knowledge base: {context_results[0]['text'][:500]}..." if context_results else "I'm having trouble processing your question right now.",
+                "answer": fallback_message,
                 "sources": sources,
                 "confidence": context_results[0]['relevance_score'] if context_results else 0.0
             }
