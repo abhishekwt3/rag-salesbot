@@ -197,7 +197,7 @@ export default function BlogPage() {
                     variant="outline"
                     className="w-full border-brand-cerulean text-brand-cerulean hover:bg-brand-cerulean hover:text-white bg-transparent"
                   >
-                    <Link href={`/blog/${post.id}`}>
+                    <Link href={`/blogs/${post.id}`}>
                       Read Article
                       <ArrowRight className="ml-2 h-4 w-4" />
                     </Link>
