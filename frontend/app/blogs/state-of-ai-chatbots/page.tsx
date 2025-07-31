@@ -77,24 +77,24 @@ export default function AISalesChatAgentsBlog() {
             conversions and enhances customer experiences. As online shopping continues to dominate retail—projected to
             reach $8.1 trillion globally by 2026—businesses are turning to these intelligent tools to stay competitive.
             Drawing from recent industry reports, including surveys from Gartner and Forrester, this post explores how
-            AI chat agents boost sales, backed by real data from studies conducted up to 2024. We'll break down adoption
+            AI chat agents boost sales, backed by real data from studies conducted up to 2024. We&apos;ll break down adoption
             trends, ROI, challenges, and actionable strategies to help e-commerce brands leverage them effectively.
           </div>
 
           <Card className="my-8 border-brand-cerulean/20 bg-gradient-to-r from-brand-cerulean/5 to-brand-dark-cyan/5">
             <CardContent className="p-6">
               <blockquote className="text-xl font-medium text-brand-midnight italic border-l-4 border-brand-cerulean pl-6 mb-0">
-                "Imagine a virtual salesperson that never sleeps, instantly recommends products, and closes deals faster
-                than human reps."
+                &ldquo;Imagine a virtual salesperson that never sleeps, instantly recommends products, and closes deals faster
+                than human reps.&rdquo;
               </blockquote>
             </CardContent>
           </Card>
 
           <p className="text-lg text-brand-midnight/80 leading-relaxed mb-8">
-            That's the promise of AI sales chat agents, which have seen adoption skyrocket: 62% of e-commerce businesses
+            That&apos;s the promise of AI sales chat agents, which have seen adoption skyrocket: 62% of e-commerce businesses
             now use chatbots for sales, up from 45% in 2022. A 2024 Gartner report highlights that AI-driven chat can
-            increase sales by up to 20% through proactive engagement. But how exactly do they work, and what's the real
-            impact? Based on insights from surveys of over 1,000 e-commerce leaders and consumers, let's dive in.
+            increase sales by up to 20% through proactive engagement. But how exactly do they work, and what&apos;s the real
+            impact? Based on insights from surveys of over 1,000 e-commerce leaders and consumers, let&apos;s dive in.
           </p>
 
           {/* Visual: E-commerce growth chart */}
@@ -125,7 +125,7 @@ export default function AISalesChatAgentsBlog() {
           </h2>
 
           <p className="text-lg text-brand-midnight/80 leading-relaxed mb-6">
-            AI sales chat agents are no longer niche tools—they're integral to e-commerce across sectors like fashion,
+            AI sales chat agents are no longer niche tools—they&apos;re integral to e-commerce across sectors like fashion,
             electronics, and beauty. Adoption is widespread: 70% of online retailers report using them for customer
             interactions, with higher rates in high-traffic industries (e.g., 85% in fashion retail). Key use cases
             include product recommendations, cart abandonment recovery, and upselling during browsing sessions.
@@ -134,7 +134,7 @@ export default function AISalesChatAgentsBlog() {
           <Card className="my-8 border-brand-dark-cyan/20 bg-gradient-to-r from-brand-dark-cyan/5 to-brand-midnight/5">
             <CardContent className="p-6">
               <blockquote className="text-xl font-medium text-brand-midnight italic border-l-4 border-brand-dark-cyan pl-6 mb-0">
-                "55% of U.S. consumers have interacted with sales chatbots."
+                &ldquo;55% of U.S. consumers have interacted with sales chatbots.&rdquo;
               </blockquote>
             </CardContent>
           </Card>
@@ -208,8 +208,8 @@ export default function AISalesChatAgentsBlog() {
           <Card className="my-8 border-brand-cerulean/20 bg-gradient-to-r from-brand-cerulean/5 to-brand-dark-cyan/5">
             <CardContent className="p-6">
               <blockquote className="text-xl font-medium text-brand-midnight italic border-l-4 border-brand-cerulean pl-6 mb-0">
-                "Think of AI agents as digital store associates, like how Amazon's chat features have contributed to a
-                35% increase in personalized sales interactions."
+                &ldquo;Think of AI agents as digital store associates, like how Amazon&apos;s chat features have contributed to a
+                35% increase in personalized sales interactions.&rdquo;
               </blockquote>
             </CardContent>
           </Card>
@@ -226,42 +226,28 @@ export default function AISalesChatAgentsBlog() {
             human teams for complex queries.
           </p>
 
-          {/* Visual: ROI bar chart */}
-          {/* <figure className="my-12">
-            <div className="bg-gradient-to-br from-brand-dark-cyan/10 to-brand-cerulean/10 p-8 rounded-xl">
-              <img
-                src="https://example.com/roi-bar-chart.png"
-                alt="ROI metrics for AI chat agents"
-                className="w-full rounded-lg shadow-lg"
-              />
-              <figcaption className="text-center text-sm text-brand-midnight/60 mt-4 font-medium">
-                Key ROI metrics (Source: Gartner 2025 Magic Quadrant for Digital Commerce)
-              </figcaption>
-            </div>
-          </figure> */}
-
           <h2 className="text-3xl font-display font-bold text-brand-midnight mt-16 mb-6 border-b-2 border-brand-dark-cyan/20 pb-3">
             Challenges and Balanced Perspectives
           </h2>
 
           <p className="text-lg text-brand-midnight/80 leading-relaxed mb-6">
-            Despite the hype, AI sales chat agents aren't perfect—consumers often highlight limitations in handling
+            Despite the hype, AI sales chat agents aren&apos;t perfect—consumers often highlight limitations in handling
             nuanced queries. A 2024 Forrester survey shows 45% of shoppers prefer human interaction for complex issues
-            like returns, citing AI's occasional misunderstandings (e.g., 30% failure rate on ambiguous questions).
+            like returns, citing AI&apos;s occasional misunderstandings (e.g., 30% failure rate on ambiguous questions).
             Expectations vs. reality: While 80% expect instant responses, only 60% report seamless experiences, leading
-            to frustration if the bot can't escalate effectively.
+            to frustration if the bot can&apos;t escalate effectively.
           </p>
 
           <Card className="my-8 border-brand-midnight/20 bg-gradient-to-r from-brand-midnight/5 to-brand-dark-cyan/5">
             <CardContent className="p-6">
               <blockquote className="text-xl font-medium text-brand-midnight italic border-l-4 border-brand-midnight pl-6 mb-0">
-                "40% of consumers are indifferent to AI vs. human if outcomes are met."
+                &ldquo;40% of consumers are indifferent to AI vs. human if outcomes are met.&rdquo;
               </blockquote>
             </CardContent>
           </Card>
 
           <p className="text-lg text-brand-midnight/80 leading-relaxed mb-8">
-            There's a silver lining: 40% of consumers are indifferent to AI vs. human if outcomes are met, especially
+            There&apos;s a silver lining: 40% of consumers are indifferent to AI vs. human if outcomes are met, especially
             for routine tasks. Pros include 24/7 availability and no wait times, versus human strengths in empathy and
             creativity. The key challenge? Integration issues, with 35% of businesses struggling to align AI with
             existing systems. Addressing these through better training data can turn skeptics into advocates.
@@ -303,20 +289,6 @@ export default function AISalesChatAgentsBlog() {
           <p className="text-lg text-brand-midnight/80 leading-relaxed mb-8">
            With the continued rapid progress in generative AI and conversational commerce, we can expect even more intuitive features—such as guided product configuration, on-the-fly bundling, and personalized deal surfacing—to become commonplace. Early adopters in fashion and electronics have already reported sales increases of 10–15% using such AI-first journeys. The future is clear: e-commerce brands that leverage AI chat agents to replace static navigation with interactive, intelligent conversations will set a new benchmark for customer experience, convenience, and loyalty.
           </p>
-
-          {/* Visual: Future adoption timeline */}
-          {/* <figure className="my-12">
-            <div className="bg-gradient-to-br from-brand-dark-cyan/10 to-brand-cerulean/10 p-8 rounded-xl">
-              <img
-                src="https://example.com/future-timeline.png"
-                alt="AI adoption forecast"
-                className="w-full rounded-lg shadow-lg"
-              />
-              <figcaption className="text-center text-sm text-brand-midnight/60 mt-4 font-medium">
-                AI adoption forecast to 2030 (Source: Gartner 2025)
-              </figcaption>
-            </div>
-          </figure> */}
 
           <h2 className="text-3xl font-display font-bold text-brand-midnight mt-16 mb-6 border-b-2 border-brand-dark-cyan/20 pb-3">
             Recommendations, Conclusion, and Call to Action
@@ -391,20 +363,6 @@ export default function AISalesChatAgentsBlog() {
               from sources like Shopify and Statista, all accessed as of July 30, 2025.
             </p>
           </div>
-
-          {/* Visual: Key takeaways infographic */}
-          {/* <figure className="my-12">
-            <div className="bg-gradient-to-br from-brand-dark-cyan/10 to-brand-cerulean/10 p-8 rounded-xl">
-              <img
-                src="https://example.com/key-takeaways-infographic.png"
-                alt="Key takeaways for AI chat agents"
-                className="w-full rounded-lg shadow-lg"
-              />
-              <figcaption className="text-center text-sm text-brand-midnight/60 mt-4 font-medium">
-                Summary of key takeaways
-              </figcaption>
-            </div>
-          </figure> */}
 
           {/* Call to Action Section */}
           <Card className="mt-16 border-brand-dark-cyan/20 bg-gradient-to-r from-brand-dark-cyan/10 via-brand-cerulean/10 to-brand-midnight/10">
