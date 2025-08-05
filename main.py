@@ -40,7 +40,9 @@ from simple_scraper import HybridScraper as WebScraper
 # Import Google OAuth
 from google_oauth import GoogleOAuth, get_google_oauth_endpoints
 
-from saas_embeddings import MemcacheS3VectorStore 
+#from saas_embeddings import MemcacheS3VectorStore 
+#from saas_embeddings import MemcacheGCSVectorStore
+from saas_embeddings import MemcacheGCSVectorStore
 
 import httpx
 
@@ -48,9 +50,9 @@ def validate_environment():
     """Validate required environment variables"""
     required_vars = [
         'MEMCACHE_HOST',
-        'AWS_ACCESS_KEY_ID', 
-        'AWS_SECRET_ACCESS_KEY',
-        'S3_EMBEDDINGS_BUCKET',
+        # 'AWS_ACCESS_KEY_ID', 
+        # 'AWS_SECRET_ACCESS_KEY',
+        'GCS_EMBEDDINGS_BUCKET',
         'GOOGLE_API_KEY'
     ]
     
@@ -95,13 +97,13 @@ class SaaSVectorManager:
     def __init__(self):
         self.vector_stores = {}  # user_id -> knowledge_base_id -> vector_store
         
-    def get_vector_store(self, user_id: str, knowledge_base_id: str) -> MemcacheS3VectorStore:
+    def get_vector_store(self, user_id: str, knowledge_base_id: str) -> MemcacheGCSVectorStore:
         if user_id not in self.vector_stores:
             self.vector_stores[user_id] = {}
         
         if knowledge_base_id not in self.vector_stores[user_id]:
             # Create vector store with user and KB IDs (no local directory needed)
-            self.vector_stores[user_id][knowledge_base_id] = MemcacheS3VectorStore(
+            self.vector_stores[user_id][knowledge_base_id] = MemcacheGCSVectorStore(
                 user_id=user_id,
                 knowledge_base_id=knowledge_base_id
             )

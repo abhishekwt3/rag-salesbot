@@ -7,9 +7,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_HOST=maindock.crao4a2ccsjm.ap-south-1.rds.amazonaws.com
+      - DB_HOST=34.131.25.230
       - DB_PORT=5432
-      - DB_NAME=salesdok
+      - DB_NAME=salesdokdb
       - DB_USER=postgres
       - DB_PASSWORD=${DB_PASSWORD}
       - MEMCACHE_HOST=memcache
@@ -17,9 +17,8 @@ services:
       - TRANSFORMERS_CACHE=/app/cache
       - HF_HOME=/app/cache
       - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - S3_EMBEDDINGS_BUCKET=vectorware
+      - GCS_EMBEDDINGS_BUCKET=${GCS_EMBEDDINGS_BUCKET}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-service-account.json
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
@@ -31,6 +30,9 @@ services:
       # Add volumes for file uploads and temp storage
       - upload_storage:/app/uploads
       - temp_storage:/app/tmp
+       # Mount GCS service account key file
+      - ./gcs-service-account.json:/app/gcs-service-account.json:ro
+
     depends_on:
       - memcache
     restart: unless-stopped

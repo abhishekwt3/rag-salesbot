@@ -1,4 +1,4 @@
-# saas_embeddings.py - Multi-tenant Vector Store with Memcache + S3
+# saas_embeddings.py - Multi-tenant Vector Store with Memcache + GCS
 import os
 import json
 import time
@@ -15,17 +15,17 @@ from sentence_transformers import SentenceTransformer
 import faiss  # Ultra fast similarity search
 import httpx
 
-# Memcache and S3 clients
+# Memcache and GCS clients
 import pymemcache.client.base
 import pymemcache.serde
 import pickle
-import boto3
-from botocore.exceptions import ClientError
+from google.cloud import storage
+from google.api_core import exceptions as gcs_exceptions
 
 logger = logging.getLogger(__name__)
 
-class MemcacheS3VectorStore:
-    """Multi-tenant vector store using Memcache + S3 backend"""
+class MemcacheGCSVectorStore:
+    """Multi-tenant vector store using Memcache + GCS backend"""
     
     def __init__(self, user_id: str, knowledge_base_id: str, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         """Initialize with user and knowledge base IDs"""
@@ -43,7 +43,7 @@ class MemcacheS3VectorStore:
         # Speed optimizations
         self.batch_size = 32  # Process in batches for speed
         
-        # 🚀 Memcache + S3 Configuration
+        # 🚀 Memcache + GCS Configuration
         self._setup_clients()
         
         # Cache keys for this knowledge base
@@ -52,11 +52,11 @@ class MemcacheS3VectorStore:
         self.faiss_key = f"{self.cache_prefix}:faiss"
         self.metadata_key = f"{self.cache_prefix}:metadata"
         
-        # S3 paths for this knowledge base
-        self.s3_prefix = f"embeddings/{user_id}/{knowledge_base_id}"
-        self.s3_chunks_key = f"{self.s3_prefix}/chunks.json.gz"
-        self.s3_faiss_key = f"{self.s3_prefix}/faiss_index.bin"
-        self.s3_metadata_key = f"{self.s3_prefix}/metadata.json"
+        # GCS paths for this knowledge base
+        self.gcs_prefix = f"embeddings/{user_id}/{knowledge_base_id}"
+        self.gcs_chunks_key = f"{self.gcs_prefix}/chunks.json.gz"
+        self.gcs_faiss_key = f"{self.gcs_prefix}/faiss_index.bin"
+        self.gcs_metadata_key = f"{self.gcs_prefix}/metadata.json"
         
         # Google API key for LLM responses
         self.google_api_key = os.getenv('GOOGLE_API_KEY')
@@ -64,10 +64,10 @@ class MemcacheS3VectorStore:
             logger.warning("GOOGLE_API_KEY not found in environment")
         
         # Load existing data if available
-        self._load_from_cache_or_s3()
+        self._load_from_cache_or_gcs()
     
     def _setup_clients(self):
-        """Setup Memcache and S3 clients"""
+        """Setup Memcache and GCS clients"""
         try:
             # Memcache client
             memcache_host = os.getenv('MEMCACHE_HOST', 'localhost')
@@ -89,23 +89,22 @@ class MemcacheS3VectorStore:
             self.memcache = None
         
         try:
-            # S3 client
-            self.s3_client = boto3.client(
-                's3',
-                aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-                aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-                region_name=os.getenv('AWS_REGION', 'ap-south-1')
-            )
+            # Google Cloud Storage client
+            # Authentication will be handled by:
+            # 1. GOOGLE_APPLICATION_CREDENTIALS environment variable (service account key file)
+            # 2. Or default credentials if running on GCP
+            self.gcs_client = storage.Client()
             
-            self.s3_bucket = os.getenv('S3_EMBEDDINGS_BUCKET', 'your-embeddings-bucket')
+            self.gcs_bucket_name = os.getenv('GCS_EMBEDDINGS_BUCKET', 'your-embeddings-bucket')
+            self.gcs_bucket = self.gcs_client.bucket(self.gcs_bucket_name)
             
-            # Test S3 connection
-            self.s3_client.head_bucket(Bucket=self.s3_bucket)
-            logger.info(f"✅ Connected to S3 bucket: {self.s3_bucket}")
+            # Test GCS connection
+            self.gcs_bucket.reload()
+            logger.info(f"✅ Connected to GCS bucket: {self.gcs_bucket_name}")
             
         except Exception as e:
-            logger.error(f"❌ Failed to connect to S3: {e}")
-            self.s3_client = None
+            logger.error(f"❌ Failed to connect to GCS: {e}")
+            self.gcs_client = None
     
     def _load_model(self):
         """Load sentence transformer model with optimizations"""
@@ -128,8 +127,8 @@ class MemcacheS3VectorStore:
         """Decompress data"""
         return gzip.decompress(compressed_data)
     
-    def _save_to_cache_and_s3(self):
-        """Save embeddings and index to Memcache + S3"""
+    def _save_to_cache_and_gcs(self):
+        """Save embeddings and index to Memcache + GCS"""
         try:
             save_start = time.time()
             
@@ -154,22 +153,22 @@ class MemcacheS3VectorStore:
             # 🚀 Save to Memcache (fast, for immediate access)
             cache_success = self._save_to_memcache(chunks_data, metadata)
             
-            # 💾 Save to S3 (persistent, for durability)
-            s3_success = self._save_to_s3(chunks_data, metadata)
+            # 💾 Save to GCS (persistent, for durability)
+            gcs_success = self._save_to_gcs(chunks_data, metadata)
             
             save_time = time.time() - save_start
             
-            if cache_success and s3_success:
-                logger.info(f"💾 Saved {len(self.chunks)} chunks to Memcache + S3 in {save_time:.2f}s")
+            if cache_success and gcs_success:
+                logger.info(f"💾 Saved {len(self.chunks)} chunks to Memcache + GCS in {save_time:.2f}s")
             elif cache_success:
-                logger.warning(f"⚠️ Saved to Memcache only (S3 failed) in {save_time:.2f}s")
-            elif s3_success:
-                logger.warning(f"⚠️ Saved to S3 only (Memcache failed) in {save_time:.2f}s")
+                logger.warning(f"⚠️ Saved to Memcache only (GCS failed) in {save_time:.2f}s")
+            elif gcs_success:
+                logger.warning(f"⚠️ Saved to GCS only (Memcache failed) in {save_time:.2f}s")
             else:
-                logger.error(f"❌ Failed to save to both Memcache and S3")
+                logger.error(f"❌ Failed to save to both Memcache and GCS")
             
         except Exception as e:
-            logger.error(f"Error saving to cache and S3: {e}")
+            logger.error(f"Error saving to cache and GCS: {e}")
     
     def _save_to_memcache(self, chunks_data: dict, metadata: dict) -> bool:
         """Save data to Memcache"""
@@ -199,9 +198,9 @@ class MemcacheS3VectorStore:
             logger.error(f"❌ Memcache save error: {e}")
             return False
     
-    def _save_to_s3(self, chunks_data: dict, metadata: dict) -> bool:
-        """Save data to S3"""
-        if not self.s3_client:
+    def _save_to_gcs(self, chunks_data: dict, metadata: dict) -> bool:
+        """Save data to Google Cloud Storage"""
+        if not self.gcs_client:
             return False
         
         try:
@@ -209,46 +208,47 @@ class MemcacheS3VectorStore:
             chunks_json = json.dumps(chunks_data).encode('utf-8')
             compressed_chunks = self._compress_data(chunks_json)
             
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_chunks_key,
-                Body=compressed_chunks,
-                ContentType='application/gzip',
-                Metadata={
-                    'user-id': self.user_id,
-                    'knowledge-base-id': self.knowledge_base_id,
-                    'total-chunks': str(len(self.chunks))
-                }
+            chunks_blob = self.gcs_bucket.blob(self.gcs_chunks_key)
+            chunks_blob.upload_from_string(
+                compressed_chunks,
+                content_type='application/gzip'
             )
+            
+            # Set custom metadata
+            chunks_blob.metadata = {
+                'user-id': self.user_id,
+                'knowledge-base-id': self.knowledge_base_id,
+                'total-chunks': str(len(self.chunks))
+            }
+            chunks_blob.patch()
             
             # Save FAISS index if available
             if self.index:
                 faiss_data = faiss.serialize_index(self.index)
                 faiss_bytes = faiss_data.tobytes() if hasattr(faiss_data, 'tobytes') else bytes(faiss_data)
-                self.s3_client.put_object(
-                    Bucket=self.s3_bucket,
-                    Key=self.s3_faiss_key,
-                    Body=faiss_bytes,
-                    ContentType='application/octet-stream'
+                
+                faiss_blob = self.gcs_bucket.blob(self.gcs_faiss_key)
+                faiss_blob.upload_from_string(
+                    faiss_bytes,
+                    content_type='application/octet-stream'
                 )
             
             # Save metadata
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_metadata_key,
-                Body=json.dumps(metadata).encode('utf-8'),
-                ContentType='application/json'
+            metadata_blob = self.gcs_bucket.blob(self.gcs_metadata_key)
+            metadata_blob.upload_from_string(
+                json.dumps(metadata),
+                content_type='application/json'
             )
             
-            logger.debug(f"✅ Saved to S3: {self.s3_prefix}")
+            logger.debug(f"✅ Saved to GCS: {self.gcs_prefix}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ S3 save error: {e}")
+            logger.error(f"❌ GCS save error: {e}")
             return False
     
-    def _load_from_cache_or_s3(self):
-        """Load embeddings and index from Memcache or S3"""
+    def _load_from_cache_or_gcs(self):
+        """Load embeddings and index from Memcache or GCS"""
         try:
             load_start = time.time()
             # Try Memcache first (fast path)
@@ -257,15 +257,15 @@ class MemcacheS3VectorStore:
                 load_time = time.time() - load_start
                 logger.info(f"⚡ MEMCACHE HIT: Loaded {len(self.chunks)} chunks in {load_time:.3f}s (FAST PATH)")
                 return
-            logger.info("❌ Memcache miss - falling back to S3...")
+            logger.info("❌ Memcache miss - falling back to GCS...")
             
-            # Fallback to S3 (slower but persistent)
-            if self._load_from_s3():
-                s3_load_time = time.time() - load_start
-                logger.info(f"📁 S3 FALLBACK: Loaded {len(self.chunks)} chunks in {s3_load_time:.3f}s (SLOW PATH)")
+            # Fallback to GCS (slower but persistent)
+            if self._load_from_gcs():
+                gcs_load_time = time.time() - load_start
+                logger.info(f"📁 GCS FALLBACK: Loaded {len(self.chunks)} chunks in {gcs_load_time:.3f}s (SLOW PATH)")
                 # Cache in Memcache for next time
                 self._cache_in_memcache()
-                logger.info("💾 Cached S3 data to Memcache for faster future access")
+                logger.info("💾 Cached GCS data to Memcache for faster future access")
                 return
             
             logger.info(f"📁 No existing data found for {self.user_id}/{self.knowledge_base_id}")
@@ -295,23 +295,26 @@ class MemcacheS3VectorStore:
                 faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
                 self.index = faiss.deserialize_index(faiss_data)
             
+            return True
+            
         except Exception as e:
             logger.error(f"❌ Memcache load error: {e}")
             return False
     
-    def _load_from_s3(self) -> bool:
-        """Load data from S3"""
-        if not self.s3_client:
+    def _load_from_gcs(self) -> bool:
+        """Load data from Google Cloud Storage"""
+        if not self.gcs_client:
             return False
         
         try:
             # Load chunks data
-            response = self.s3_client.get_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_chunks_key
-            )
+            chunks_blob = self.gcs_bucket.blob(self.gcs_chunks_key)
             
-            compressed_data = response['Body'].read()
+            if not chunks_blob.exists():
+                logger.debug(f"No GCS data found for {self.gcs_prefix}")
+                return False
+            
+            compressed_data = chunks_blob.download_as_bytes()
             decompressed_data = self._decompress_data(compressed_data)
             chunks_data = json.loads(decompressed_data.decode('utf-8'))
             
@@ -322,24 +325,23 @@ class MemcacheS3VectorStore:
             
             # Load FAISS index
             try:
-                faiss_response = self.s3_client.get_object(
-                    Bucket=self.s3_bucket,
-                    Key=self.s3_faiss_key
-                )
-                faiss_bytes = faiss_response['Body'].read()
-                faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
-                self.index = faiss.deserialize_index(faiss_data)
-            except ClientError:
-                logger.debug("No FAISS index found in S3, will rebuild")
+                faiss_blob = self.gcs_bucket.blob(self.gcs_faiss_key)
+                if faiss_blob.exists():
+                    faiss_bytes = faiss_blob.download_as_bytes()
+                    faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
+                    self.index = faiss.deserialize_index(faiss_data)
+                else:
+                    logger.debug("No FAISS index found in GCS, will rebuild")
+            except Exception as e:
+                logger.debug(f"Error loading FAISS index from GCS: {e}")
             
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                logger.debug(f"No S3 data found for {self.s3_prefix}")
-            else:
-                logger.error(f"❌ S3 load error: {e}")
+            return True
+            
+        except gcs_exceptions.NotFound:
+            logger.debug(f"No GCS data found for {self.gcs_prefix}")
             return False
         except Exception as e:
-            logger.error(f"❌ S3 load error: {e}")
+            logger.error(f"❌ GCS load error: {e}")
             return False
     
     def _cache_in_memcache(self):
@@ -439,8 +441,8 @@ class MemcacheS3VectorStore:
         self.ready = True
         self.last_updated = datetime.now().isoformat()
         
-        # 🚀 Save to Memcache + S3 instead of disk
-        self._save_to_cache_and_s3()
+        # 🚀 Save to Memcache + GCS instead of disk
+        self._save_to_cache_and_gcs()
         
         total_time = time.time() - total_start
         logger.info(f"🎉 Processing complete in {total_time:.2f}s")
@@ -449,7 +451,7 @@ class MemcacheS3VectorStore:
     async def search_similar(self, query: str, max_results: int = 5) -> List[Dict]:
         """Ultra fast semantic search using FAISS"""
         if not self.ready:
-            self._load_from_cache_or_s3()
+            self._load_from_cache_or_gcs()
         
         if not self.ready or self.index is None:
             logger.error("❌ Search index not ready!")
@@ -665,7 +667,7 @@ Response:"""
     def is_ready(self) -> bool:
         """Check if vector store is ready for queries"""
         if not self.ready:
-            self._load_from_cache_or_s3()
+            self._load_from_cache_or_gcs()
         return self.ready and len(self.chunks) > 0
     
     def get_total_chunks(self) -> int:
@@ -685,8 +687,8 @@ Response:"""
             # Clear cache
             self.invalidate_cache()
             
-            # Optionally clear S3 (commented out for safety)
-            # self._delete_from_s3()
+            # Optionally clear GCS (commented out for safety)
+            # self._delete_from_gcs()
             
             logger.info(f"🗑️ Cleared all data for {self.user_id}/{self.knowledge_base_id}")
             
@@ -749,8 +751,8 @@ Response:"""
             self.ready = True
             self.last_updated = datetime.now().isoformat()
 
-            # 🚀 Save to Memcache + S3
-            self._save_to_cache_and_s3()
+            # 🚀 Save to Memcache + GCS
+            self._save_to_cache_and_gcs()
 
             logger.info(f"Added {len(chunks)} chunks from document: {metadata.get('title', 'Unknown')}")
 
@@ -761,4 +763,4 @@ Response:"""
             return 0
 
 # Alias for backward compatibility
-SaaSVectorStore = MemcacheS3VectorStore
+SaaSVectorStore = MemcacheGCSVectorStore
