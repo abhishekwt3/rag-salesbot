@@ -18,7 +18,7 @@ services:
       - HF_HOME=/app/cache
       - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
       - GCS_EMBEDDINGS_BUCKET=${GCS_EMBEDDINGS_BUCKET}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/focus-standard-467913-k2-c5f17486ddf9.json
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-service-account.json
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
@@ -31,7 +31,7 @@ services:
       - upload_storage:/app/uploads
       - temp_storage:/app/tmp
        # Mount GCS service account key file
-      - ./focus-standard-467913-k2-c5f17486ddf9.json:/app/focus-standard-467913-k2-c5f17486ddf9.json:ro
+      - ./gcs-service-account.json:/app/gcs-service-account.json:ro
 
     depends_on:
       - memcache
