@@ -23,6 +23,13 @@ httpx==0.28.1
 playwright==1.40.0
 beautifulsoup4==4.12.2
 
+# NEW: ChromaDB for local vector storage
+chromadb==1.0.15
+
+# Google APIs - UPDATED
+google-generativeai==0.8.5
+
+
 # ML and embeddings
 sentence-transformers==5.0.0
 faiss-cpu==1.11.0

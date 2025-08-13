@@ -1,393 +1,158 @@
-# saas_embeddings.py - Multi-tenant Vector Store with Memcache + GCS
+# saas_embeddings.py - Multi-tenant Vector Store with Google Embeddings + ChromaDB
 import os
 import json
 import time
-import numpy as np
-import pickle
 import gzip
 from typing import List, Dict, Optional
 from datetime import datetime
 import logging
 from pathlib import Path
+import uuid
 
-# Fast sentence transformers
-from sentence_transformers import SentenceTransformer
-import faiss  # Ultra fast similarity search
+# Google Embedding API
+import google.generativeai as genai
 import httpx
 
-# Memcache and GCS clients
+# ChromaDB for vector storage
+import chromadb
+from chromadb.config import Settings
+
+# Memcache client (keeping existing cache system)
 import pymemcache.client.base
 import pymemcache.serde
 import pickle
-from google.cloud import storage
-from google.api_core import exceptions as gcs_exceptions
 
 logger = logging.getLogger(__name__)
 
-class MemcacheGCSVectorStore:
-    """Multi-tenant vector store using Memcache + GCS backend"""
+class MemcacheS3VectorStore:
+    """Multi-tenant vector store using Google Embeddings + ChromaDB with Memcache + S3 backend"""
     
-    def __init__(self, user_id: str, knowledge_base_id: str, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, user_id: str, knowledge_base_id: str, model_name: str = "models/embedding-001"):
         """Initialize with user and knowledge base IDs"""
         self.user_id = user_id
         self.knowledge_base_id = knowledge_base_id
         self.model_name = model_name
-        self.model = None
-        self.embeddings = None
         self.chunks = []
-        self.index = None  # FAISS index for ultra-fast search
-        self.dimension = 384  # all-MiniLM-L6-v2 dimension
         self.ready = False
         self.last_updated = None
         
         # Speed optimizations
         self.batch_size = 32  # Process in batches for speed
         
-        # 🚀 Memcache + GCS Configuration
+        # 🚀 Google Embedding API setup
+        self.google_api_key = os.getenv('GOOGLE_API_KEY')
+        if not self.google_api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
+        
+        genai.configure(api_key=self.google_api_key)
+        
+        # 🗄️ ChromaDB setup
+        self.collection_name = f"kb_{user_id}_{knowledge_base_id}".replace('-', '_')
+        self._setup_chromadb()
+        
+        # 🚀 Memcache Configuration (keeping existing cache)
         self._setup_clients()
         
         # Cache keys for this knowledge base
         self.cache_prefix = f"embeddings:{user_id}:{knowledge_base_id}"
         self.chunks_key = f"{self.cache_prefix}:chunks"
-        self.faiss_key = f"{self.cache_prefix}:faiss"
         self.metadata_key = f"{self.cache_prefix}:metadata"
         
-        # GCS paths for this knowledge base
-        self.gcs_prefix = f"embeddings/{user_id}/{knowledge_base_id}"
-        self.gcs_chunks_key = f"{self.gcs_prefix}/chunks.json.gz"
-        self.gcs_faiss_key = f"{self.gcs_prefix}/faiss_index.bin"
-        self.gcs_metadata_key = f"{self.gcs_prefix}/metadata.json"
-        
         # Google API key for LLM responses
-        self.google_api_key = os.getenv('GOOGLE_API_KEY')
         if not self.google_api_key:
             logger.warning("GOOGLE_API_KEY not found in environment")
         
-        # Load existing data if available
-        self._load_from_cache_or_gcs()
+        # Load existing data
+        self._load_from_cache()
+    
+    def _setup_chromadb(self):
+        """Initialize ChromaDB client and collection"""
+        try:
+            # Use persistent client for data durability
+            persist_dir = f"./chroma_data/{self.user_id}/{self.knowledge_base_id}"
+            os.makedirs(persist_dir, exist_ok=True)
+            
+            self.chroma_client = chromadb.PersistentClient(
+                path=persist_dir,
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
+            )
+            
+            # Get or create collection
+            try:
+                self.collection = self.chroma_client.get_collection(
+                    name=self.collection_name
+                )
+                logger.info(f"✅ Connected to existing ChromaDB collection: {self.collection_name}")
+            except Exception:
+                self.collection = self.chroma_client.create_collection(
+                    name=self.collection_name,
+                    metadata={"description": f"Knowledge base {self.knowledge_base_id} for user {self.user_id}"}
+                )
+                logger.info(f"✅ Created new ChromaDB collection: {self.collection_name}")
+                
+        except Exception as e:
+            logger.error(f"❌ ChromaDB setup failed: {e}")
+            raise
     
     def _setup_clients(self):
-        """Setup Memcache and GCS clients"""
+        """Setup Memcache client"""
+        # Memcache setup
         try:
-            # Memcache client
-            memcache_host = os.getenv('MEMCACHE_HOST', 'localhost')
-            memcache_port = int(os.getenv('MEMCACHE_PORT', '11211'))
-            
+            memcache_host = os.getenv('MEMCACHE_HOST', 'localhost:11211')
             self.memcache = pymemcache.client.base.Client(
-                (memcache_host, memcache_port),
-                serde=pymemcache.serde.pickle_serde,  # Use serde instead
+                (memcache_host.split(':')[0], int(memcache_host.split(':')[1])),
+                serializer=pymemcache.serde.pickle_serde,
                 connect_timeout=5,
                 timeout=10
             )
-            
-            # Test memcache connection
-            self.memcache.set('test', 'connection', expire=1)
-            logger.info(f"✅ Connected to Memcache at {memcache_host}:{memcache_port}")
-            
+            logger.info(f"✅ Memcache connected: {memcache_host}")
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Memcache: {e}")
+            logger.warning(f"⚠️ Memcache connection failed: {e}")
             self.memcache = None
+    
+    async def _generate_embeddings_google(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using Google Embedding API"""
+        logger.info(f"🔄 Processing {len(texts)} texts with Google Embedding API in batches of {self.batch_size}")
         
-        try:
-            # Google Cloud Storage client
-            # Authentication will be handled by:
-            # 1. GOOGLE_APPLICATION_CREDENTIALS environment variable (service account key file)
-            # 2. Or default credentials if running on GCP
-            self.gcs_client = storage.Client()
-            
-            self.gcs_bucket_name = os.getenv('GCS_EMBEDDINGS_BUCKET', 'your-embeddings-bucket')
-            self.gcs_bucket = self.gcs_client.bucket(self.gcs_bucket_name)
-            
-            # Test GCS connection
-            self.gcs_bucket.reload()
-            logger.info(f"✅ Connected to GCS bucket: {self.gcs_bucket_name}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to GCS: {e}")
-            self.gcs_client = None
-    
-    def _load_model(self):
-        """Load sentence transformer model with optimizations"""
-        if self.model is None:
-            logger.info(f"Loading model: {self.model_name}")
-            start_time = time.time()
-            
-            # Load with optimizations
-            self.model = SentenceTransformer(self.model_name)
-            self.model.eval()  # Set to evaluation mode
-            
-            load_time = time.time() - start_time
-            logger.info(f"✅ Model loaded in {load_time:.2f}s")
-    
-    def _compress_data(self, data: bytes) -> bytes:
-        """Compress data for storage efficiency"""
-        return gzip.compress(data)
-    
-    def _decompress_data(self, compressed_data: bytes) -> bytes:
-        """Decompress data"""
-        return gzip.decompress(compressed_data)
-    
-    def _save_to_cache_and_gcs(self):
-        """Save embeddings and index to Memcache + GCS"""
-        try:
-            save_start = time.time()
-            
-            # Prepare data for storage
-            chunks_data = {
-                'chunks': self.chunks,
-                'embeddings': self.embeddings,
-                'last_updated': self.last_updated,
-                'ready': self.ready,
-                'model_name': self.model_name
-            }
-            
-            metadata = {
-                'user_id': self.user_id,
-                'knowledge_base_id': self.knowledge_base_id,
-                'total_chunks': len(self.chunks),
-                'last_updated': self.last_updated,
-                'model_name': self.model_name,
-                'ready': self.ready
-            }
-            
-            # 🚀 Save to Memcache (fast, for immediate access)
-            cache_success = self._save_to_memcache(chunks_data, metadata)
-            
-            # 💾 Save to GCS (persistent, for durability)
-            gcs_success = self._save_to_gcs(chunks_data, metadata)
-            
-            save_time = time.time() - save_start
-            
-            if cache_success and gcs_success:
-                logger.info(f"💾 Saved {len(self.chunks)} chunks to Memcache + GCS in {save_time:.2f}s")
-            elif cache_success:
-                logger.warning(f"⚠️ Saved to Memcache only (GCS failed) in {save_time:.2f}s")
-            elif gcs_success:
-                logger.warning(f"⚠️ Saved to GCS only (Memcache failed) in {save_time:.2f}s")
-            else:
-                logger.error(f"❌ Failed to save to both Memcache and GCS")
-            
-        except Exception as e:
-            logger.error(f"Error saving to cache and GCS: {e}")
-    
-    def _save_to_memcache(self, chunks_data: dict, metadata: dict) -> bool:
-        """Save data to Memcache"""
-        if not self.memcache:
-            return False
+        all_embeddings = []
         
-        try:
-            # Cache with 1 hour TTL (3600 seconds)
-            cache_ttl = int(os.getenv('MEMCACHE_TTL', '3600'))
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i:i + self.batch_size]
             
-            # Save chunks and embeddings (largest data)
-            self.memcache.set(self.chunks_key, chunks_data, expire=cache_ttl)
-            
-            # Save FAISS index if available
-            if self.index:
-                faiss_data = faiss.serialize_index(self.index)
-                faiss_bytes = faiss_data.tobytes() if hasattr(faiss_data, 'tobytes') else bytes(faiss_data)
-                self.memcache.set(self.faiss_key, faiss_bytes, expire=cache_ttl)
-    
-            # Save metadata (small, longer TTL)
-            self.memcache.set(self.metadata_key, metadata, expire=cache_ttl * 24)  # 24 hours
-            
-            logger.debug(f"✅ Cached data for {self.cache_prefix}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Memcache save error: {e}")
-            return False
-    
-    def _save_to_gcs(self, chunks_data: dict, metadata: dict) -> bool:
-        """Save data to Google Cloud Storage"""
-        if not self.gcs_client:
-            return False
-        
-        try:
-            # Save compressed chunks data
-            chunks_json = json.dumps(chunks_data).encode('utf-8')
-            compressed_chunks = self._compress_data(chunks_json)
-            
-            chunks_blob = self.gcs_bucket.blob(self.gcs_chunks_key)
-            chunks_blob.upload_from_string(
-                compressed_chunks,
-                content_type='application/gzip'
-            )
-            
-            # Set custom metadata
-            chunks_blob.metadata = {
-                'user-id': self.user_id,
-                'knowledge-base-id': self.knowledge_base_id,
-                'total-chunks': str(len(self.chunks))
-            }
-            chunks_blob.patch()
-            
-            # Save FAISS index if available
-            if self.index:
-                faiss_data = faiss.serialize_index(self.index)
-                faiss_bytes = faiss_data.tobytes() if hasattr(faiss_data, 'tobytes') else bytes(faiss_data)
-                
-                faiss_blob = self.gcs_bucket.blob(self.gcs_faiss_key)
-                faiss_blob.upload_from_string(
-                    faiss_bytes,
-                    content_type='application/octet-stream'
-                )
-            
-            # Save metadata
-            metadata_blob = self.gcs_bucket.blob(self.gcs_metadata_key)
-            metadata_blob.upload_from_string(
-                json.dumps(metadata),
-                content_type='application/json'
-            )
-            
-            logger.debug(f"✅ Saved to GCS: {self.gcs_prefix}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ GCS save error: {e}")
-            return False
-    
-    def _load_from_cache_or_gcs(self):
-        """Load embeddings and index from Memcache or GCS"""
-        try:
-            load_start = time.time()
-            # Try Memcache first (fast path)
-            logger.info("🔍 Checking Memcache for existing data...")
-            if self._load_from_memcache():
-                load_time = time.time() - load_start
-                logger.info(f"⚡ MEMCACHE HIT: Loaded {len(self.chunks)} chunks in {load_time:.3f}s (FAST PATH)")
-                return
-            logger.info("❌ Memcache miss - falling back to GCS...")
-            
-            # Fallback to GCS (slower but persistent)
-            if self._load_from_gcs():
-                gcs_load_time = time.time() - load_start
-                logger.info(f"📁 GCS FALLBACK: Loaded {len(self.chunks)} chunks in {gcs_load_time:.3f}s (SLOW PATH)")
-                # Cache in Memcache for next time
-                self._cache_in_memcache()
-                logger.info("💾 Cached GCS data to Memcache for faster future access")
-                return
-            
-            logger.info(f"📁 No existing data found for {self.user_id}/{self.knowledge_base_id}")
-            
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-    
-    def _load_from_memcache(self) -> bool:
-        """Load data from Memcache"""
-        if not self.memcache:
-            return False
-        
-        try:
-            # Load chunks and embeddings
-            chunks_data = self.memcache.get(self.chunks_key)
-            if not chunks_data:
-                return False
-            
-            self.chunks = chunks_data.get('chunks', [])
-            self.embeddings = chunks_data.get('embeddings', [])
-            self.last_updated = chunks_data.get('last_updated')
-            self.ready = chunks_data.get('ready', False)
-            
-            # Load FAISS index
-            faiss_bytes = self.memcache.get(self.faiss_key)
-            if faiss_bytes:
-                faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
-                self.index = faiss.deserialize_index(faiss_data)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Memcache load error: {e}")
-            return False
-    
-    def _load_from_gcs(self) -> bool:
-        """Load data from Google Cloud Storage"""
-        if not self.gcs_client:
-            return False
-        
-        try:
-            # Load chunks data
-            chunks_blob = self.gcs_bucket.blob(self.gcs_chunks_key)
-            
-            if not chunks_blob.exists():
-                logger.debug(f"No GCS data found for {self.gcs_prefix}")
-                return False
-            
-            compressed_data = chunks_blob.download_as_bytes()
-            decompressed_data = self._decompress_data(compressed_data)
-            chunks_data = json.loads(decompressed_data.decode('utf-8'))
-            
-            self.chunks = chunks_data.get('chunks', [])
-            self.embeddings = chunks_data.get('embeddings', [])
-            self.last_updated = chunks_data.get('last_updated')
-            self.ready = chunks_data.get('ready', False)
-            
-            # Load FAISS index
             try:
-                faiss_blob = self.gcs_bucket.blob(self.gcs_faiss_key)
-                if faiss_blob.exists():
-                    faiss_bytes = faiss_blob.download_as_bytes()
-                    faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
-                    self.index = faiss.deserialize_index(faiss_data)
-                else:
-                    logger.debug("No FAISS index found in GCS, will rebuild")
+                # Generate embeddings for batch
+                batch_embeddings = []
+                for text in batch:
+                    result = genai.embed_content(
+                        model=self.model_name,
+                        content=text,
+                        task_type="retrieval_document"
+                    )
+                    batch_embeddings.append(result['embedding'])
+                
+                all_embeddings.extend(batch_embeddings)
+                
+                if (i + self.batch_size) % 100 == 0:
+                    logger.info(f"   ⚡ Processed {min(i + self.batch_size, len(texts))}/{len(texts)} texts")
+                
+                # Rate limiting for API
+                time.sleep(0.1)
+                
             except Exception as e:
-                logger.debug(f"Error loading FAISS index from GCS: {e}")
-            
-            return True
-            
-        except gcs_exceptions.NotFound:
-            logger.debug(f"No GCS data found for {self.gcs_prefix}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ GCS load error: {e}")
-            return False
+                logger.error(f"❌ Google Embedding API error for batch {i}: {e}")
+                # Add zero embeddings for failed batch to maintain indexing
+                batch_embeddings = [[0.0] * 768 for _ in batch]  # Google embeddings are 768-dim
+                all_embeddings.extend(batch_embeddings)
+        
+        return all_embeddings
     
-    def _cache_in_memcache(self):
-        """Cache currently loaded data in Memcache"""
-        if not self.memcache or not self.chunks:
-            return
-        
-        chunks_data = {
-            'chunks': self.chunks,
-            'embeddings': self.embeddings,
-            'last_updated': self.last_updated,
-            'ready': self.ready,
-            'model_name': self.model_name
-        }
-        
-        metadata = {
-            'user_id': self.user_id,
-            'knowledge_base_id': self.knowledge_base_id,
-            'total_chunks': len(self.chunks),
-            'last_updated': self.last_updated,
-            'ready': self.ready
-        }
-        
-        self._save_to_memcache(chunks_data, metadata)
-    
-    def invalidate_cache(self):
-        """Invalidate Memcache entries for this knowledge base"""
-        if not self.memcache:
-            return
-        
-        try:
-            self.memcache.delete(self.chunks_key)
-            self.memcache.delete(self.faiss_key) 
-            self.memcache.delete(self.metadata_key)
-            logger.info(f"🗑️ Invalidated cache for {self.cache_prefix}")
-        except Exception as e:
-            logger.error(f"Error invalidating cache: {e}")
-    
-    # Keep all existing methods but replace storage calls
     async def process_pages(self, pages: List[Dict]):
-        """Process pages into vector embeddings"""
-        logger.info(f"🚀 Processing {len(pages)} pages for vector store...")
+        """Process pages with Google Embeddings + ChromaDB"""
+        logger.info(f"🚀 Google Embeddings + ChromaDB processing for {len(pages)} pages...")
         total_start = time.time()
-        
-        # Load model
-        self._load_model()
         
         # Step 1: Create chunks
         logger.info("📝 Step 1: Creating chunks...")
@@ -411,204 +176,272 @@ class MemcacheGCSVectorStore:
             logger.error("❌ No chunks created!")
             return
         
-        # Step 2: Generate embeddings
-        logger.info("🧠 Step 2: Generating embeddings...")
+        # Step 2: Generate embeddings with Google API
+        logger.info("🧠 Step 2: Generating embeddings with Google API...")
         embeddings_start = time.time()
         
         texts = [chunk['text'] for chunk in all_chunks]
-        embeddings = self._generate_embeddings_fast(texts)
+        embeddings = await self._generate_embeddings_google(texts)
         
         embeddings_time = time.time() - embeddings_start
         logger.info(f"✅ Generated {len(embeddings)} embeddings in {embeddings_time:.2f}s")
         
-        # Step 3: Build FAISS index
-        logger.info("🔍 Step 3: Building FAISS index...")
-        faiss_start = time.time()
+        # Step 3: Store in ChromaDB
+        logger.info("💾 Step 3: Storing in ChromaDB...")
+        storage_start = time.time()
         
-        embeddings_array = np.array(embeddings).astype('float32')
-        self.index = faiss.IndexFlatIP(self.dimension)  # Inner Product for cosine similarity
+        # Clear existing collection data
+        try:
+            self.collection.delete()
+            logger.info("🗑️ Cleared existing collection data")
+        except Exception as e:
+            logger.debug(f"Collection clear info: {e}")
         
-        # Normalize embeddings for cosine similarity
-        faiss.normalize_L2(embeddings_array)
-        self.index.add(embeddings_array)
+        # Prepare data for ChromaDB
+        documents = [chunk['text'] for chunk in all_chunks]
+        metadatas = [chunk['metadata'] for chunk in all_chunks]
+        ids = [str(uuid.uuid4()) for _ in all_chunks]
         
-        faiss_time = time.time() - faiss_start
-        logger.info(f"✅ FAISS index built in {faiss_time:.2f}s")
+        # Add to ChromaDB
+        self.collection.add(
+            documents=documents,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
         
-        # Store data
+        storage_time = time.time() - storage_start
+        logger.info(f"✅ Stored in ChromaDB in {storage_time:.2f}s")
+        
+        # Update instance data
         self.chunks = all_chunks
-        self.embeddings = embeddings
         self.ready = True
         self.last_updated = datetime.now().isoformat()
         
-        # 🚀 Save to Memcache + GCS instead of disk
-        self._save_to_cache_and_gcs()
+        # 🚀 Save to Memcache
+        self._save_to_cache()
         
         total_time = time.time() - total_start
-        logger.info(f"🎉 Processing complete in {total_time:.2f}s")
-        logger.info(f"📊 Ready for semantic search: {len(self.chunks)} chunks")
+        logger.info(f"🎉 TOTAL PROCESSING TIME: {total_time:.2f}s for {len(all_chunks)} chunks")
     
-    async def search_similar(self, query: str, max_results: int = 5) -> List[Dict]:
-        """Ultra fast semantic search using FAISS"""
+    async def semantic_search(self, query: str, max_results: int = 5) -> List[Dict]:
+        """Search using ChromaDB"""
         if not self.ready:
-            self._load_from_cache_or_gcs()
-        
-        if not self.ready or self.index is None:
-            logger.error("❌ Search index not ready!")
+            logger.warning("Vector store not ready")
             return []
         
         try:
-            # Generate query embedding
-            self._load_model()
-            query_embedding = self.model.encode(
-                [query], 
-                normalize_embeddings=True,
-                convert_to_numpy=True
+            # Generate query embedding with Google API
+            query_result = genai.embed_content(
+                model=self.model_name,
+                content=query,
+                task_type="retrieval_query"
             )
+            query_embedding = query_result['embedding']
             
-            # FAISS search
-            scores, indices = self.index.search(query_embedding, max_results)
+            # Search ChromaDB
+            search_start = time.time()
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=max_results,
+                include=["documents", "metadatas", "distances"]
+            )
+            search_time = time.time() - search_start
             
-            results = []
-            for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-                if idx < len(self.chunks):
-                    chunk = self.chunks[idx].copy()
-                    chunk['relevance_score'] = float(score)
-                    results.append(chunk)
+            logger.info(f"🔍 ChromaDB search completed in {search_time*1000:.1f}ms")
             
-            return results
+            # Format results
+            formatted_results = []
+            if results['documents'] and results['documents'][0]:
+                for i, (doc, metadata, distance) in enumerate(zip(
+                    results['documents'][0],
+                    results['metadatas'][0], 
+                    results['distances'][0]
+                )):
+                    formatted_results.append({
+                        'text': doc,
+                        'metadata': metadata,
+                        'score': 1.0 - distance  # Convert distance to similarity score
+                    })
+            
+            return formatted_results
             
         except Exception as e:
             logger.error(f"Error in semantic search: {e}")
             return []
     
-    async def process_query(self, question: str, max_results: int = 5) -> Dict:
-        """Process user query using semantic search + LLM"""
-        logger.info(f"🔍 Processing query: '{question[:50]}...'")
-        
-        # Get semantically relevant context
-        context_results = await self.search_similar(question, max_results)
-        
-        if not context_results:
-            return {
-                "answer": "I don't have information about that topic in my knowledge base.",
-                "sources": [],
-                "confidence": 0.0
-            }
-        
-        # Prepare context for LLM
-        context_text = ""
-        sources = []
-        
-        for result in context_results:
-            context_text += f"Source: {result['metadata']['title']}\n"
-            context_text += f"URL: {result['metadata']['source_url']}\n"
-            context_text += f"Content: {result['text']}\n\n"
-            
-            sources.append({
-                "url": result['metadata']['source_url'],
-                "title": result['metadata']['title'],
-                "relevance_score": result['relevance_score']
-            })
-        
-        # Generate response using Gemini
-
-        if not self.google_api_key:
-            return {
-                "answer": "I'm here to help, but I'm having trouble accessing our knowledge base right now. Let me try to assist you with the information I have available: " + context_results[0]['text'][:200] + "... Would you like me to try again or can I help you with something else?",
-                "sources": sources,
-                "confidence": context_results[0]['relevance_score'] if context_results else 0.0
-            }
-
+    async def process_document(self, document_data: dict) -> int:
+        """Process a single document and add it to the vector store"""
         try:
-            # Improved prompt that makes the AI act as a business representative
-            prompt = f"""You are an intelligent AI assistant representing this business and helping their customers. You have access to the company's knowledge base and should respond as a helpful, professional representative of this business.
+            text_content = document_data.get('text', '')
+            metadata = document_data.get('metadata', {})
 
-CONTEXT FROM KNOWLEDGE BASE:
-{context_text}
+            if not text_content.strip():
+                return 0
 
-CUSTOMER QUESTION: {question}
-
-RULES:
-- You are a knowledgeable sales representative of this business
-- Be friendly and professional
-- Use only the provided context
-- Keep responses concise (2-3 sentences max)
-- If context is incomplete, briefly explain what you know and ask one clarifying question
-- Never copy large text chunks - summarize naturally
-- Present information as if you're explaining it from your expertise, not reading from documents
-
-Response:"""
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.google_api_key}",
-                    json={
-                        "contents": [{
-                            "parts": [{"text": prompt}]
-                        }],
-                        "generationConfig": {
-                            "temperature": 0.7,  # Slightly more creative for conversational tone
-                            "topP": 0.8,
-                            "topK": 40,
-                            "maxOutputTokens": 1024,
-                        }
-                    },
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    answer = result['candidates'][0]['content']['parts'][0]['text']
-                    
-                    # Calculate average confidence
-                    avg_confidence = sum(r['relevance_score'] for r in context_results) / len(context_results)
-                    
-                    return {
-                        "answer": answer,
-                        "sources": sources,
-                        "confidence": avg_confidence
-                    }
-                else:
-                    logger.error(f"Gemini API error: {response.status_code} - {response.text}")
-                    return {
-                        "answer": "I'm here to help! I found some relevant information in our knowledge base, but I'm having a small technical issue right now. Let me share what I can: " + context_results[0]['text'][:300] + "... Can you let me know more specifically what you're looking for so I can better assist you?",
-                        "sources": sources,
-                        "confidence": context_results[0]['relevance_score']
-                    }
-                    
-        except Exception as e:
-            logger.error(f"Error calling Gemini API: {e}")
-            fallback_message = "I'm experiencing a technical issue right now, but I'm here to help! "
-            
-            if context_results:
-                # Provide a more conversational fallback with available context
-                fallback_message += f"I can see we have information about your question. {context_results[0]['text'][:200]}... Would you like to try asking your question differently, or is there something specific I can help clarify?"
-            else:
-                fallback_message += "Could you please rephrase your question or let me know more details about what you're looking for? I want to make sure I give you the most helpful information."
-            
-            return {
-                "answer": fallback_message,
-                "sources": sources,
-                "confidence": context_results[0]['relevance_score'] if context_results else 0.0
+            # Create a page-like structure for the _create_chunks method
+            page_structure = {
+                'content': text_content,
+                'url': metadata.get('source_url', 'uploaded_file'),
+                'title': metadata.get('title', 'Uploaded Document'),
+                'scraped_at': metadata.get('uploaded_at', datetime.now().isoformat())
             }
+
+            # Use existing _create_chunks method
+            chunks = self._create_chunks(page_structure)
+
+            if not chunks:
+                return 0
+
+            # Generate embeddings for the new chunks
+            texts = [chunk['text'] for chunk in chunks]
+            new_embeddings = await self._generate_embeddings_google(texts)
+
+            if not new_embeddings:
+                return 0
+
+            # Add to ChromaDB
+            documents = [chunk['text'] for chunk in chunks]
+            metadatas = [chunk['metadata'] for chunk in chunks]
+            ids = [str(uuid.uuid4()) for _ in chunks]
+            
+            self.collection.add(
+                documents=documents,
+                embeddings=new_embeddings,
+                metadatas=metadatas,
+                ids=ids
+            )
+
+            # Add to existing data
+            self.chunks.extend(chunks)
+
+            # Update metadata
+            self.ready = True
+            self.last_updated = datetime.now().isoformat()
+
+            # 🚀 Save to Memcache
+            self._save_to_cache()
+
+            logger.info(f"Added {len(chunks)} chunks from document: {metadata.get('title', 'Unknown')}")
+
+            return len(chunks)
+
+        except Exception as e:
+            logger.error(f"Error processing document: {e}")
+            return 0
+
+    def clear_data(self):
+        """Clear all data from this vector store"""
+        try:
+            # Clear ChromaDB collection
+            try:
+                self.collection.delete()
+                logger.info("🗑️ Cleared ChromaDB collection")
+            except Exception as e:
+                logger.debug(f"ChromaDB clear info: {e}")
+            
+            # Clear memory
+            self.chunks = []
+            self.ready = False
+            self.last_updated = None
+            
+            # Clear Memcache
+            if self.memcache:
+                try:
+                    self.memcache.delete(self.chunks_key)
+                    self.memcache.delete(self.metadata_key)
+                    logger.info(f"🗑️ Cleared Memcache for {self.cache_prefix}")
+                except Exception as e:
+                    logger.error(f"Error clearing Memcache: {e}")
+            
+            logger.info(f"🗑️ Cleared all data for {self.user_id}/{self.knowledge_base_id}")
+            
+        except Exception as e:
+            logger.error(f"Error clearing data: {e}")
+
+    async def add_document(self, document_data: Dict) -> int:
+        """Add a single document to the knowledge base"""
+        try:
+            logger.info(f"📄 Adding document: {document_data.get('filename', 'Unknown')}")
+
+            # Create page structure for compatibility
+            page_structure = {
+                'content': document_data.get('content', ''),
+                'url': document_data.get('filename', ''),
+                'title': document_data.get('filename', ''),
+                'scraped_at': datetime.now().isoformat()
+            }
+
+            # Use existing _create_chunks method
+            chunks = self._create_chunks(page_structure)
+
+            if not chunks:
+                return 0
+
+            # Generate embeddings for the new chunks
+            texts = [chunk['text'] for chunk in chunks]
+            new_embeddings = await self._generate_embeddings_google(texts)
+
+            if not new_embeddings:
+                return 0
+
+            # Add to ChromaDB
+            documents = [chunk['text'] for chunk in chunks]
+            metadatas = [chunk['metadata'] for chunk in chunks]
+            ids = [str(uuid.uuid4()) for _ in chunks]
+            
+            self.collection.add(
+                documents=documents,
+                embeddings=new_embeddings,
+                metadatas=metadatas,
+                ids=ids
+            )
+
+            # Add to existing data
+            self.chunks.extend(chunks)
+
+            # Update metadata
+            self.ready = True
+            self.last_updated = datetime.now().isoformat()
+
+            # 🚀 Save to Memcache
+            self._save_to_cache()
+
+            logger.info(f"Added {len(chunks)} chunks from document: {document_data.get('filename', 'Unknown')}")
+
+            return len(chunks)
+
+        except Exception as e:
+            logger.error(f"Error processing document: {e}")
+            return 0
     
     def _create_chunks(self, page: Dict) -> List[Dict]:
-        """Create chunks from page content"""
+        """Create chunks from page content (keeping existing implementation)"""
         try:
             content = page.get('content', '')
-            if not content:
+            if not content or len(content) < 100:
                 return []
             
-            chunks = []
-            sentences = content.split('. ')
+            # Sentence-based chunking for better semantic coherence
+            sentences = [s.strip() for s in content.split('.') if s.strip()]
             
+            chunks = []
             current_chunk = ""
-            max_chunk_size = 500  # characters
             
             for sentence in sentences:
-                if len(current_chunk) + len(sentence) + 2 <= max_chunk_size:
-                    current_chunk += sentence + ". "
+                # If adding this sentence would make chunk too long, save current chunk
+                if len(current_chunk) + len(sentence) > 800:  # Optimal chunk size
+                    if current_chunk:
+                        chunks.append({
+                            'text': current_chunk.strip(),
+                            'metadata': {
+                                'source_url': page.get('url', ''),
+                                'title': page.get('title', ''),
+                                'chunk_index': len(chunks),
+                                'scraped_at': page.get('scraped_at', '')
+                            }
+                        })
+                    current_chunk = sentence + ". "
                 else:
                     if current_chunk.strip():
                         chunks.append({
@@ -639,128 +472,331 @@ Response:"""
         except Exception as e:
             logger.error(f"Error creating chunks: {e}")
             return []
+
     
-    def _generate_embeddings_fast(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings with speed optimizations"""
-        logger.info(f"   🔄 Processing {len(texts)} texts in batches of {self.batch_size}")
-        
-        all_embeddings = []
-        
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i:i + self.batch_size]
+    def _save_to_cache(self):
+        """Save chunks metadata to Memcache (ChromaDB handles embeddings)"""
+        try:
+            save_start = time.time()
             
-            batch_embeddings = self.model.encode(
-                batch,
-                batch_size=self.batch_size,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=True
+            # Prepare metadata for storage (no need to store embeddings as ChromaDB handles that)
+            chunks_data = {
+                'chunks': self.chunks,
+                'last_updated': self.last_updated,
+                'ready': self.ready,
+                'model_name': self.model_name
+            }
+            
+            metadata = {
+                'user_id': self.user_id,
+                'knowledge_base_id': self.knowledge_base_id,
+                'total_chunks': len(self.chunks),
+                'last_updated': self.last_updated,
+                'model_name': self.model_name,
+                'ready': self.ready
+            }
+            
+            # 🚀 Save to Memcache (fast, for immediate access)
+            cache_success = self._save_to_memcache(chunks_data, metadata)
+            
+            save_time = time.time() - save_start
+            
+            if cache_success:
+                logger.info(f"💾 Saved {len(self.chunks)} chunks metadata to Memcache in {save_time:.2f}s")
+            else:
+                logger.error(f"❌ Failed to save to Memcache")
+            
+        except Exception as e:
+            logger.error(f"Error saving to cache: {e}")
+    
+    def _save_to_memcache(self, chunks_data: dict, metadata: dict) -> bool:
+        """Save data to Memcache"""
+        if not self.memcache:
+            return False
+        
+        try:
+            # Cache with 1 hour TTL
+            ttl = 3600
+            self.memcache.set(self.chunks_key, chunks_data, expire=ttl)
+            self.memcache.set(self.metadata_key, metadata, expire=ttl)
+            
+            logger.debug(f"✅ Saved to Memcache: {self.cache_prefix}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Memcache save error: {e}")
+            return False
+    
+    def _load_from_cache(self):
+        """Load chunks from Memcache or fallback to ChromaDB"""
+        try:
+            load_start = time.time()
+            # Try Memcache first
+            logger.info("🔍 Checking Memcache for existing data...")
+            if self._load_from_memcache():
+                load_time = time.time() - load_start
+                logger.info(f"⚡ MEMCACHE HIT: Loaded {len(self.chunks)} chunks in {load_time:.3f}s")
+                return
+            
+            logger.info("❌ Memcache miss - checking ChromaDB...")
+            
+            # Fallback to ChromaDB (the actual database)
+            if self._load_from_chromadb():
+                db_load_time = time.time() - load_start
+                logger.info(f"📊 CHROMADB FALLBACK: Loaded {len(self.chunks)} chunks in {db_load_time:.3f}s")
+                # Cache in Memcache for next time
+                self._cache_in_memcache()
+                logger.info("💾 Cached ChromaDB data to Memcache for faster future access")
+                return
+            
+            logger.info(f"📁 No existing data found for {self.user_id}/{self.knowledge_base_id}")
+            
+        except Exception as e:
+            logger.error(f"Error loading data: {e}")
+    
+    def _load_from_memcache(self) -> bool:
+        """Load data from Memcache"""
+        if not self.memcache:
+            return False
+        
+        try:
+            # Load chunks
+            chunks_data = self.memcache.get(self.chunks_key)
+            if not chunks_data:
+                return False
+            
+            self.chunks = chunks_data.get('chunks', [])
+            self.last_updated = chunks_data.get('last_updated')
+            self.ready = chunks_data.get('ready', False)
+            
+            logger.debug(f"✅ Loaded from Memcache: {len(self.chunks)} chunks")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Memcache load error: {e}")
+            return False
+    
+    def _load_from_chromadb(self) -> bool:
+        """Load chunks metadata from ChromaDB when Memcache fails"""
+        try:
+            # Check if ChromaDB collection has data
+            count = self.collection.count()
+            if count == 0:
+                return False
+            
+            # Get all documents and metadata from ChromaDB
+            results = self.collection.get(
+                include=["documents", "metadatas"]
             )
             
-            all_embeddings.extend(batch_embeddings.tolist())
+            if not results['documents']:
+                return False
             
-            if (i + self.batch_size) % 100 == 0:
-                logger.info(f"   ⚡ Processed {min(i + self.batch_size, len(texts))}/{len(texts)} texts")
+            # Rebuild chunks list from ChromaDB data
+            self.chunks = []
+            for doc, metadata in zip(results['documents'], results['metadatas']):
+                self.chunks.append({
+                    'text': doc,
+                    'metadata': metadata
+                })
+            
+            self.ready = True
+            self.last_updated = datetime.now().isoformat()
+            
+            logger.debug(f"✅ Loaded from ChromaDB: {len(self.chunks)} chunks")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ ChromaDB load error: {e}")
+            return False
+    
+    def _cache_in_memcache(self):
+        """Cache current data in Memcache after ChromaDB load"""
+        if not self.memcache:
+            return
         
-        return all_embeddings
+        chunks_data = {
+            'chunks': self.chunks,
+            'last_updated': self.last_updated,
+            'ready': self.ready,
+            'model_name': self.model_name
+        }
+        
+        metadata = {
+            'user_id': self.user_id,
+            'knowledge_base_id': self.knowledge_base_id,
+            'total_chunks': len(self.chunks),
+            'last_updated': self.last_updated,
+            'model_name': self.model_name,
+            'ready': self.ready
+        }
+        
+        self._save_to_memcache(chunks_data, metadata)
+
+    
+    async def process_query(self, question: str, max_results: int = 5) -> Dict:
+        """Process a query and return answer with sources"""
+        if not self.ready:
+            return {
+                "answer": "Knowledge base is not ready. Please process some content first.",
+                "sources": [],
+                "confidence": 0.0
+            }
+        
+        try:
+            # Get relevant chunks
+            relevant_chunks = await self.semantic_search(question, max_results)
+            
+            if not relevant_chunks:
+                return {
+                    "answer": "I couldn't find relevant information to answer your question.",
+                    "sources": [],
+                    "confidence": 0.0
+                }
+            
+            # Prepare context for LLM
+            context = "\n\n".join([chunk['text'] for chunk in relevant_chunks])
+            sources = [chunk['metadata'] for chunk in relevant_chunks]
+            
+            # Generate answer using Google's Gemini API
+            answer = await self._generate_answer_google(question, context)
+            
+            return {
+                "answer": answer,
+                "sources": sources,
+                "confidence": 0.8  # Default confidence
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return {
+                "answer": "Sorry, I encountered an error processing your question.",
+                "sources": [],
+                "confidence": 0.0
+            }
+    
+    async def _generate_answer_google(self, question: str, context: str) -> str:
+        """Generate answer using Google's Gemini API"""
+        try:
+            # Use Gemini for text generation
+            model = genai.GenerativeModel('gemini-2.0-flash')
+
+            prompt = f"""You are a helpful sales assistant. Based on the following information, concisely answer the customer's question and focus on how our features can help them.
+
+Information:
+{context}
+
+Customer Question: {question}
+
+Answer as a knowledgeable sales assistant. If you don't have the specific information needed, say you'll get back to them."""
+
+            response = model.generate_content(prompt)
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"Error generating answer with Google API: {e}")
+            return "I'll get back to you with that information. Please try again."
     
     def is_ready(self) -> bool:
         """Check if vector store is ready for queries"""
         if not self.ready:
-            self._load_from_cache_or_gcs()
-        return self.ready and len(self.chunks) > 0
+            # Try to load from cache if not already loaded
+            self._load_from_cache()
+        
+        # Also check if ChromaDB collection has data
+        try:
+            count = self.collection.count()
+            return self.ready and count > 0
+        except Exception:
+            return self.ready and len(self.chunks) > 0
     
     def get_total_chunks(self) -> int:
-        """Get total number of chunks in vector store"""
-        return len(self.chunks)
-    
-    def clear_data(self):
-        """Clear all data from this vector store"""
+        """Get total number of chunks"""
         try:
-            # Clear memory
-            self.chunks = []
-            self.embeddings = None
-            self.index = None
-            self.ready = False
-            self.last_updated = None
-            
-            # Clear cache
-            self.invalidate_cache()
-            
-            # Optionally clear GCS (commented out for safety)
-            # self._delete_from_gcs()
-            
-            logger.info(f"🗑️ Cleared all data for {self.user_id}/{self.knowledge_base_id}")
-            
-        except Exception as e:
-            logger.error(f"Error clearing data: {e}")
+            return self.collection.count()
+        except Exception:
+            return len(self.chunks)
 
-    async def process_document(self, document_data: dict) -> int:
-        """Process a single document and add it to the vector store"""
-        try:
-            text_content = document_data.get('text', '')
-            metadata = document_data.get('metadata', {})
+# Test functions for connections
+def test_google_embeddings():
+    """Simple test for Google Embedding API connection"""
+    try:
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            print("❌ GOOGLE_API_KEY not found in environment")
+            return False
+        
+        genai.configure(api_key=api_key)
+        
+        # Test embedding generation
+        result = genai.embed_content(
+            model="models/embedding-001",
+            content="This is a test sentence for Google Embeddings API.",
+            task_type="retrieval_document"
+        )
+        
+        embedding = result['embedding']
+        print(f"✅ Google Embeddings API connected successfully!")
+        print(f"   📏 Embedding dimension: {len(embedding)}")
+        print(f"   🔢 Sample values: {embedding[:5]}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Google Embeddings API test failed: {e}")
+        return False
 
-            if not text_content.strip():
-                return 0
-
-            # Load model if not already loaded
-            self._load_model()
-
-            # Create a page-like structure for the _create_chunks method
-            page_structure = {
-                'content': text_content,
-                'url': metadata.get('source_url', 'uploaded_file'),
-                'title': metadata.get('title', 'Uploaded Document'),
-                'scraped_at': metadata.get('uploaded_at', datetime.now().isoformat())
-            }
-
-            # Use existing _create_chunks method
-            chunks = self._create_chunks(page_structure)
-
-            if not chunks:
-                return 0
-
-            # Generate embeddings for the new chunks
-            texts = [chunk['text'] for chunk in chunks]
-            new_embeddings = self._generate_embeddings_fast(texts)
-
-            if not new_embeddings:
-                return 0
-
-            # Add to existing data
-            self.chunks.extend(chunks)
-
-            # Handle embeddings
-            if self.embeddings is None:
-                self.embeddings = new_embeddings
-            else:
-                self.embeddings.extend(new_embeddings)
-
-            # Rebuild FAISS index with all embeddings
-            embeddings_array = np.array(self.embeddings).astype('float32')
-
-            # Create new index
-            self.index = faiss.IndexFlatIP(self.dimension)  # Inner Product for cosine similarity
-
-            # Normalize embeddings for cosine similarity
-            faiss.normalize_L2(embeddings_array)
-            self.index.add(embeddings_array)
-
-            # Update metadata
-            self.ready = True
-            self.last_updated = datetime.now().isoformat()
-
-            # 🚀 Save to Memcache + GCS
-            self._save_to_cache_and_gcs()
-
-            logger.info(f"Added {len(chunks)} chunks from document: {metadata.get('title', 'Unknown')}")
-
-            return len(chunks)
-
-        except Exception as e:
-            logger.error(f"Error processing document: {e}")
-            return 0
+def test_chromadb():
+    """Simple test for ChromaDB connection"""
+    try:
+        # Test persistent client
+        test_dir = "./chroma_test"
+        os.makedirs(test_dir, exist_ok=True)
+        
+        client = chromadb.PersistentClient(
+            path=test_dir,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        
+        # Create test collection
+        collection_name = f"test_collection_{int(time.time())}"
+        collection = client.create_collection(name=collection_name)
+        
+        # Test add and query
+        collection.add(
+            documents=["This is a test document"],
+            ids=["test-1"],
+            metadatas=[{"source": "test"}]
+        )
+        
+        results = collection.query(
+            query_texts=["test document"],
+            n_results=1
+        )
+        
+        print(f"✅ ChromaDB connected successfully!")
+        print(f"   📊 Collection created: {collection_name}")
+        print(f"   🔍 Query results: {len(results['documents'][0])} documents found")
+        
+        # Cleanup
+        client.delete_collection(collection_name)
+        import shutil
+        shutil.rmtree(test_dir)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ ChromaDB test failed: {e}")
+        return False
 
 # Alias for backward compatibility
-SaaSVectorStore = MemcacheGCSVectorStore
+SaaSVectorStore = MemcacheS3VectorStore
+
+if __name__ == "__main__":
+    print("🧪 Testing connections...")
+    print("\n1. Testing Google Embeddings API:")
+    test_google_embeddings()
+    
+    print("\n2. Testing ChromaDB:")
+    test_chromadb()
+    
+    print("\n✅ Connection tests completed!")

@@ -9,6 +9,7 @@ import re
 from playwright.async_api import async_playwright, Page, BrowserContext
 from bs4 import BeautifulSoup
 import httpx
+from posthog import page
 
 logger = logging.getLogger(__name__)
 
@@ -94,28 +95,23 @@ class AdvancedWebScraper:
             await route.continue_()
     
     async def _scrape_single_page_dynamic(self, url: str) -> Optional[Dict]:
-        """Scrape a single page with full JavaScript support"""
+        """Scrape with better timeout handling"""
         try:
             page = await self.context.new_page()
-            
-            logger.info(f"📄 Scraping dynamic page: {url}")
-            
-            # Navigate with extended timeout for slow sites
-            await page.goto(url, wait_until='networkidle', timeout=30000)
-            
-            # Wait for any dynamic content to load
-            await self._wait_for_dynamic_content(page)
-            
-            # Extract content
+            logger.info(f"📄 Scraping: {url}")        
+            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
+            await page.wait_for_timeout(2000)
             page_data = await self._extract_page_content_dynamic(page, url)
-            
             await page.close()
             return page_data
-            
+        
         except Exception as e:
-            logger.error(f"Error scraping dynamic page {url}: {e}")
-            if 'page' in locals():
-                await page.close()
+            logger.error(f"Error scraping {url}: {e}")
+            if page:
+                try:
+                    await page.close()
+                except:
+                    pass
             return None
     
     async def _scrape_multiple_pages_dynamic(self, base_url: str, config: Dict) -> List[Dict]:
@@ -152,7 +148,8 @@ class AdvancedWebScraper:
                 
                 try:
                     # Navigate to page
-                    await page.goto(current_url, wait_until='networkidle', timeout=30000)
+                    await page.goto(current_url, wait_until='domcontentloaded', timeout=15000)
+                    await page.wait_for_timeout(2000)
                     
                     # Wait for dynamic content
                     await self._wait_for_dynamic_content(page)
