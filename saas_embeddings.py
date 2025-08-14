@@ -1,13 +1,13 @@
-# saas_embeddings.py - Multi-tenant Vector Store with Google Embeddings + Qdrant (rewritten)
-
+# saas_embeddings.py - Multi-tenant Vector Store with Google Embeddings + Qdrant + Incremental Updates
 from __future__ import annotations
 
 import os
 import time
 import uuid
 import math
+import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 # Google Embedding + Gemini API
@@ -24,7 +24,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
-
 # -----------------------------
 # Utility helpers
 # -----------------------------
@@ -33,25 +32,39 @@ _DEF_MAX_WORKERS = int(os.getenv("EMBED_MAX_WORKERS", "8"))
 _DEF_BATCH_SIZE = int(os.getenv("EMBED_BATCH", "32"))
 _DEF_SEARCH_LIMIT = 5
 
-
 def _now_iso() -> str:
-    return datetime.now().isoformat()
-
+    return datetime.now(timezone.utc).isoformat()
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name)
     return v if v is not None else default
 
+def content_hash(text: str) -> str:
+    """Generate SHA256 hash of content for change detection"""
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+def _chunk_text(text: str, target_words: int = 220, overlap_words: int = 40) -> List[str]:
+    """Word-based chunking with overlap for better context preservation"""
+    words = text.split()
+    if not words:
+        return []
+    chunks = []
+    step = max(1, target_words - overlap_words)
+    for i in range(0, len(words), step):
+        segment = words[i : i + target_words]
+        if not segment:
+            break
+        chunks.append(" ".join(segment).strip())
+        if i + target_words >= len(words):
+            break
+    return chunks
 
 # -----------------------------
 # Main Vector Store
 # -----------------------------
 
 class MemcacheS3VectorStore:
-    """Multi-tenant vector store using Google Embeddings + Qdrant (rewritten).
-
-    Public API preserved from the user's original file.
-    """
+    """Multi-tenant vector store using Google Embeddings + Qdrant with efficient incremental updates."""
 
     def __init__(
         self,
@@ -59,16 +72,15 @@ class MemcacheS3VectorStore:
         knowledge_base_id: str,
         model_name: str = "models/embedding-001",
     ):
-        self.user_id = user_id
-        self.knowledge_base_id = knowledge_base_id
+        self.user_id = str(user_id)
+        self.knowledge_base_id = str(knowledge_base_id)
         self.model_name = model_name
 
         # state
-        self.chunks: List[Dict] = []
         self.ready: bool = False
         self.last_updated: Optional[str] = None
         self.batch_size: int = _DEF_BATCH_SIZE
-        self.embedding_dim: Optional[int] = None  # determined after first embed
+        self.embedding_dim: Optional[int] = None
 
         # Configure Google APIs
         google_api_key = _env("GOOGLE_API_KEY")
@@ -76,439 +88,401 @@ class MemcacheS3VectorStore:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
         genai.configure(api_key=google_api_key)
 
-        # Collection naming (underscored to be safe)
-        self.collection_name = (
-            f"user_{user_id}_kb_{knowledge_base_id}".replace("-", "_")
-        )
+        # Single collection with tenant filtering (more scalable)
+        self.collection_name = os.getenv("QDRANT_COLLECTION", "kb_chunks")
 
         # Qdrant client
         self.client = self._setup_qdrant()
-
-        # Try to read existing state (points_count, vector size if possible)
         self._load_existing_data()
 
-    # -----------------------------
-    # Qdrant setup & schema
-    # -----------------------------
-
     def _setup_qdrant(self) -> QdrantClient:
-        """Initialize Qdrant client with sensible defaults."""
+        """Initialize Qdrant client"""
         url = _env("QDRANT_URL", "http://localhost:6333")
         api_key = _env("QDRANT_API_KEY")
         prefer_grpc = _env("QDRANT_GRPC", "false").lower() in {"1", "true", "yes"}
 
-        # Handle Docker service name resolution for local development
         if "qdrant:6333" in url:
             url = url.replace("qdrant:6333", "localhost:6333")
-            logger.info("Adjusted Qdrant URL for local development: %s", url)
 
-        client = QdrantClient(
-            url=url,
-            api_key=api_key,
-            prefer_grpc=prefer_grpc,
-            timeout=60,
-        )
+        client = QdrantClient(url=url, api_key=api_key, prefer_grpc=prefer_grpc, timeout=60)
 
-        # Health check
         try:
             _ = client.get_collections()
-            logger.info("✅ Connected to Qdrant at %s (grpc=%s)", url, prefer_grpc)
+            logger.info("✅ Connected to Qdrant at %s", url)
         except Exception as e:
-            logger.error("❌ Failed to connect to Qdrant at %s: %s", url, e)
+            logger.error("❌ Failed to connect to Qdrant: %s", e)
             raise
 
         return client
 
-    def _ensure_collection(self, vector_dim: int) -> None:
-        """Create collection if missing; ensure vector size matches, else recreate."""
+    async def _ensure_collection(self):
+        """Create collection if missing with proper dimension"""
+        if self.embedding_dim is None:
+            # Determine dimension by embedding a probe
+            vec = await self._embed_text("dimension probe")
+            if vec is None:
+                raise RuntimeError("Embedding failed. Check GOOGLE_API_KEY.")
+            self.embedding_dim = len(vec)
+
         try:
             existing = self.client.get_collections().collections
             names = {c.name for c in existing}
+            
             if self.collection_name not in names:
                 self.client.create_collection(
                     collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE),
+                    vectors_config=VectorParams(size=self.embedding_dim, distance=Distance.COSINE),
                 )
-                logger.info("✅ Created Qdrant collection '%s' (dim=%d)", self.collection_name, vector_dim)
-                return
-
-            # validate vector size
-            info = self.client.get_collection(self.collection_name)
-            current_dim = info.vectors_count and info.config.params.vectors.size if hasattr(info, "config") else None
-            if current_dim and int(current_dim) != int(vector_dim):
-                logger.warning(
-                    "⚠️ Collection dim mismatch (have=%s, need=%s). Recreating '%s'...",
-                    current_dim,
-                    vector_dim,
-                    self.collection_name,
-                )
-                self.client.delete_collection(self.collection_name)
-                self.client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE),
-                )
-                logger.info("✅ Recreated collection '%s' with dim=%d", self.collection_name, vector_dim)
+                logger.info("✅ Created collection '%s' (dim=%d)", self.collection_name, self.embedding_dim)
         except Exception as e:
             logger.error("Error ensuring collection: %s", e)
             raise
 
     def _load_existing_data(self) -> None:
-        """Best-effort load of existing collection info."""
+        """Check if we have existing data"""
         try:
-            info = self.client.get_collection(self.collection_name)
+            count = self.get_total_chunks()
+            if count > 0:
+                self.ready = True
+                self.last_updated = _now_iso()
+                logger.info("✅ Found %d existing chunks", count)
         except Exception:
             logger.info("📭 No existing data found")
-            return
 
-        # points_count
-        count = getattr(info, "points_count", None)
-        if isinstance(count, int) and count > 0:
-            self.ready = True
-            self.last_updated = _now_iso()
-            logger.info("✅ Found %d existing points in Qdrant", count)
+    def _point_id(self, source_id: str, chunk_index: int) -> str:
+        """Generate deterministic UUID-format point ID for safe upserts"""
+        base = f"{self.user_id}:{self.knowledge_base_id}:{source_id}:{chunk_index}"
+        hash_hex = content_hash(base)
+        
+        # Convert first 32 chars of hash to UUID format
+        # xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        uuid_str = f"{hash_hex[:8]}-{hash_hex[8:12]}-{hash_hex[12:16]}-{hash_hex[16:20]}-{hash_hex[20:32]}"
+        return uuid_str
 
-        # try to infer dim
+    def _tenant_filter(self, extra: Optional[List] = None) -> Filter:
+        """Create filter for this tenant+KB"""
+        conditions = [
+            FieldCondition(key="tenant_id", match=MatchValue(value=self.user_id)),
+            FieldCondition(key="kb_id", match=MatchValue(value=self.knowledge_base_id)),
+        ]
+        if extra:
+            conditions.extend(extra)
+        return Filter(must=conditions)
+
+    def _get_existing_points_for_source(self, source_id: str) -> List:
+        """Get all existing points for a source"""
         try:
-            # info.config.params.vectors.size for recent clients
-            cfg = getattr(info, "config", None)
-            if cfg and getattr(cfg, "params", None) and getattr(cfg.params, "vectors", None):
-                self.embedding_dim = int(cfg.params.vectors.size)
-        except Exception:
-            pass
+            filter_condition = self._tenant_filter([
+                FieldCondition(key="source_id", match=MatchValue(value=source_id))
+            ])
+            
+            collected = []
+            offset = None
+            while True:
+                response = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=filter_condition,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                points, offset = response
+                collected.extend(points or [])
+                if offset is None or not points:
+                    break
+            return collected
+        except Exception as e:
+            logger.warning("Error fetching existing points: %s", e)
+            return []
 
-    # -----------------------------
-    # Embeddings
-    # -----------------------------
+    async def _generate_embeddings_google(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using Google API with parallel processing"""
+        if not texts:
+            return []
 
-    async def _generate_embeddings_google(self, texts: List[str], concurrency: int = _DEF_MAX_WORKERS) -> List[List[float]]:
-        """Parallel embedding using Google Embedding API.
-        Returns embeddings in the **same order** as input.
-        """
-        logger.info("🔄 Processing %d texts with Google Embedding API (parallel)", len(texts))
+        logger.info("🔄 Processing %d texts with Google Embedding API", len(texts))
 
         loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=concurrency)
+        executor = ThreadPoolExecutor(max_workers=_DEF_MAX_WORKERS)
 
-        def _embed(text: str, task_type: str) -> Optional[List[float]]:
+        def _embed(text: str) -> Optional[List[float]]:
             try:
-                r = genai.embed_content(model=self.model_name, content=text, task_type=task_type)
+                r = genai.embed_content(model=self.model_name, content=text, task_type="retrieval_document")
                 emb = r["embedding"] if isinstance(r, dict) else getattr(r, "embedding", None)
                 return emb
             except Exception as e:
                 logger.error("Embedding error: %s", e)
                 return None
 
-        # Detect dimension with a quick call (document type)
-        if not self.embedding_dim:
-            try:
-                test = await loop.run_in_executor(executor, _embed, "dimension probe", "retrieval_document")
-                if test:
-                    self.embedding_dim = len(test)
-                    logger.info("📏 Detected embedding dimension: %d", self.embedding_dim)
-            except Exception as e:
-                logger.error("Failed to probe embedding dim: %s", e)
-
-        # Submit all jobs as retrieval_document
-        futures = [loop.run_in_executor(executor, _embed, t, "retrieval_document") for t in texts]
-        results: List[Optional[List[float]]] = await asyncio.gather(*futures)
+        futures = [loop.run_in_executor(executor, _embed, t) for t in texts]
+        results = await asyncio.gather(*futures)
 
         dim = self.embedding_dim or 768
-        # Replace failures with zero vectors of correct size
-        fixed = [r if (r and isinstance(r, list) and len(r) == dim) else [0.0] * dim for r in results]
+        return [r if (r and isinstance(r, list) and len(r) == dim) else [0.0] * dim for r in results]
 
-        return fixed
-
-    # -----------------------------
-    # Chunking
-    # -----------------------------
-
-    def _create_chunks(self, page: Dict) -> List[Dict]:
-        """Token-aware-ish chunking using char proxy (3 chars ≈ 1 token).
-        Adds slight overlap to preserve context.
-        """
+    async def _embed_text(self, text: str) -> Optional[List[float]]:
+        """Embed single text"""
+        if not text.strip():
+            return None
         try:
-            content = page.get("content", "")
-            if not content or len(content) < 100:
-                return []
-
-            max_tokens = 512
-            max_chars = max_tokens * 3
-            overlap = 80
-
-            sentences = [s.strip() for s in content.split(".") if s.strip()]
-            chunks: List[Dict] = []
-            cur = ""
-
-            for s in sentences:
-                s_dot = s + ". "
-                if len(cur) + len(s_dot) > max_chars:
-                    if cur:
-                        chunks.append(
-                            {
-                                "text": cur.strip(),
-                                "metadata": {
-                                    "source_url": page.get("url", ""),
-                                    "title": page.get("title", ""),
-                                    "chunk_index": len(chunks),
-                                    "scraped_at": page.get("scraped_at", _now_iso()),
-                                },
-                            }
-                        )
-                    cur_tail = cur[-overlap:] if len(cur) > overlap else cur
-                    cur = (cur_tail + s_dot).strip()
-                else:
-                    cur += s_dot
-
-            if cur.strip():
-                chunks.append(
-                    {
-                        "text": cur.strip(),
-                        "metadata": {
-                            "source_url": page.get("url", ""),
-                            "title": page.get("title", ""),
-                            "chunk_index": len(chunks),
-                            "scraped_at": page.get("scraped_at", _now_iso()),
-                        },
-                    }
-                )
-
-            return chunks
+            r = genai.embed_content(model=self.model_name, content=text, task_type="retrieval_document")
+            return r["embedding"] if isinstance(r, dict) else getattr(r, "embedding", None)
         except Exception as e:
-            logger.error("Error creating chunks: %s", e)
-            return []
+            logger.error("Embedding error: %s", e)
+            return None
+
+    async def _process_single_source(self, text: str, source_id: str, extra_meta: Dict) -> int:
+        """Process single source with incremental updates"""
+        text = (text or "").strip()
+        if not text:
+            return 0
+
+        # Create chunks
+        chunks = _chunk_text(text)
+        if not chunks:
+            return 0
+
+        # Get existing points for this source
+        existing_points = self._get_existing_points_for_source(source_id)
+        existing_by_index = {p.payload.get("chunk_index"): p for p in existing_points}
+
+        # Prepare new/changed chunks
+        points_to_upsert = []
+        upsert_count = 0
+
+        for idx, chunk in enumerate(chunks):
+            chunk_hash = content_hash(chunk)
+            point_id = self._point_id(source_id, idx)
+            
+            # Check if chunk changed
+            existing_point = existing_by_index.get(idx)
+            existing_hash = existing_point.payload.get("chunk_hash") if existing_point else None
+            
+            if existing_hash == chunk_hash:
+                continue  # Unchanged, skip
+            
+            # Embed new/changed chunk
+            vec = await self._embed_text(chunk)
+            if vec is None:
+                continue
+
+            payload = {
+                "tenant_id": self.user_id,
+                "kb_id": self.knowledge_base_id,
+                "source_id": source_id,
+                "text": chunk,
+                "chunk_index": idx,
+                "chunk_hash": chunk_hash,
+                "updated_at": _now_iso(),
+                **extra_meta
+            }
+
+            points_to_upsert.append(PointStruct(
+                id=point_id,
+                vector=vec,
+                payload=payload
+            ))
+            upsert_count += 1
+
+        # Upsert changed/new chunks
+        if points_to_upsert:
+            batch_size = max(128, self.batch_size)
+            for i in range(0, len(points_to_upsert), batch_size):
+                batch = points_to_upsert[i:i + batch_size]
+                self.client.upsert(collection_name=self.collection_name, points=batch, wait=True)
+
+        # Delete removed chunks
+        new_indices = set(range(len(chunks)))
+        points_to_delete = []
+        for idx, point in existing_by_index.items():
+            if idx not in new_indices:
+                points_to_delete.append(point.id)
+
+        if points_to_delete:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=points_to_delete,
+                wait=True
+            )
+
+        return upsert_count
 
     # -----------------------------
-    # Ingestion
+    # Public API
     # -----------------------------
 
-    async def process_pages(self, pages: List[Dict], clear_existing: bool = True) -> None:
-        """Process multiple pages (scraped website pages)."""
-        logger.info("🚀 Processing %d pages with Google + Qdrant...", len(pages))
+    async def process_pages(self, pages: List[Dict], clear_existing: bool = False) -> None:
+        """Process multiple pages with incremental updates"""
+        logger.info("🚀 Processing %d pages with incremental updates", len(pages))
         start = time.time()
+
+        await self._ensure_collection()
 
         if clear_existing:
             self.clear_data(silent=True)
 
-        # Build chunks
-        all_chunks: List[Dict] = []
+        total_upserts = 0
         for page in pages:
             try:
-                all_chunks.extend(self._create_chunks(page))
+                url = page.get("final_url") or page.get("url") or ""
+                content = page.get("text") or page.get("content") or ""
+                title = page.get("title") or ""
+                
+                if not url or not content.strip():
+                    continue
+
+                extra_meta = {
+                    "url": url,
+                    "title": title,
+                    "source_type": "web",
+                    "framework": page.get("framework", "unknown"),
+                    "word_count": page.get("word_count", 0),
+                    "scraped_at": page.get("scraped_at", _now_iso()),
+                }
+
+                upserts = await self._process_single_source(content, url, extra_meta)
+                total_upserts += upserts
+
             except Exception as e:
-                logger.error("Chunking error: %s", e)
-        if not all_chunks:
-            logger.error("❌ No chunks created!")
-            return
-        logger.info("✅ Created %d chunks", len(all_chunks))
+                logger.error("Error processing page %s: %s", page.get("url", ""), e)
 
-        # Embed (detect dimension)
-        texts = [c["text"] for c in all_chunks]
-        embeddings = await self._generate_embeddings_google(texts)
-        dim = self.embedding_dim or 768
-
-        # Ensure collection exists w/ correct dim
-        self._ensure_collection(dim)
-
-        # Prepare points
-        points: List[PointStruct] = []
-        for ch, vec in zip(all_chunks, embeddings):
-            payload = {
-                "content": ch["text"],  # keep full; Qdrant payloads can handle it
-                "source_url": ch["metadata"]["source_url"],
-                "title": ch["metadata"]["title"],
-                "chunk_index": ch["metadata"]["chunk_index"],
-                "scraped_at": ch["metadata"]["scraped_at"],
-            }
-            points.append(PointStruct(id=str(uuid.uuid4()), vector=vec, payload=payload))
-
-        # Upload efficiently: if collection empty, upload_collection (fast path), else upsert in batches
-        try:
-            info = self.client.get_collection(self.collection_name)
-            existing = int(getattr(info, "points_count", 0) or 0)
-        except Exception:
-            existing = 0
-
-        try:
-            if existing == 0 and len(points) > 0:
-                # One-shot bulk upload
-                self.client.upload_collection(
-                    collection_name=self.collection_name,
-                    vectors=[p.vector for p in points],
-                    payload=[p.payload for p in points],
-                    ids=[p.id for p in points],
-                    batch_size=max(128, self.batch_size),
-                )
-            else:
-                # Upsert in batches
-                bs = max(128, self.batch_size)
-                for i in range(0, len(points), bs):
-                    self.client.upsert(collection_name=self.collection_name, points=points[i : i + bs])
-            logger.info("✅ Stored %d points in Qdrant", len(points))
-        except Exception as e:
-            logger.error("❌ Qdrant insert failed: %s", e)
-
-        # Update state and verify
-        self.chunks = all_chunks
         self.ready = True
         self.last_updated = _now_iso()
-
-        stored = self.get_total_chunks()
-        logger.info("✅ Verified %s chunks stored in Qdrant", stored)
-        logger.info("🎉 Processed %d chunks in %.2fs", len(all_chunks), time.time() - start)
+        
+        logger.info("✅ Processed %d pages, %d chunks upserted in %.2fs", 
+                   len(pages), total_upserts, time.time() - start)
 
     async def process_document(self, document_data: dict) -> int:
-        """Process a single document payload {text, metadata} and add to the vector store."""
+        """Process single document with incremental updates"""
         try:
+            await self._ensure_collection()
+            
             text_content = document_data.get("text", "")
             metadata = document_data.get("metadata", {})
+            
             if not text_content.strip():
                 return 0
 
-            page = {
-                "content": text_content,
-                "url": metadata.get("source_url", "uploaded_file"),
+            source_id = metadata.get("source_url") or metadata.get("doc_id") or f"doc_{uuid.uuid4()}"
+            
+            extra_meta = {
+                "source_type": "document",
                 "title": metadata.get("title", "Uploaded Document"),
-                "scraped_at": metadata.get("uploaded_at", _now_iso()),
+                "file_type": metadata.get("file_type", ""),
+                **metadata
             }
 
-            chunks = self._create_chunks(page)
-            if not chunks:
-                return 0
-
-            texts = [c["text"] for c in chunks]
-            embeddings = await self._generate_embeddings_google(texts)
-            dim = self.embedding_dim or 768
-            self._ensure_collection(dim)
-
-            points: List[PointStruct] = []
-            for ch, vec in zip(chunks, embeddings):
-                payload = {
-                    "content": ch["text"],
-                    "source_url": ch["metadata"]["source_url"],
-                    "title": ch["metadata"]["title"],
-                    "chunk_index": ch["metadata"]["chunk_index"],
-                    "scraped_at": ch["metadata"]["scraped_at"],
-                }
-                points.append(PointStruct(id=str(uuid.uuid4()), vector=vec, payload=payload))
-
-            # Upsert in reasonable batch
-            bs = max(128, self.batch_size)
-            for i in range(0, len(points), bs):
-                self.client.upsert(collection_name=self.collection_name, points=points[i : i + bs])
-
-            self.chunks.extend(chunks)
+            upserts = await self._process_single_source(text_content, source_id, extra_meta)
+            
             self.ready = True
             self.last_updated = _now_iso()
 
-            logger.info("Added %d chunks from document: %s", len(chunks), metadata.get("title", "Unknown"))
-            return len(chunks)
+            logger.info("Added %d chunks from document: %s", upserts, extra_meta.get("title"))
+            return upserts
+
         except Exception as e:
             logger.error("Error processing document: %s", e)
             return 0
 
     async def add_document(self, document_data: Dict) -> int:
-        """Backward-compat shim; delegates to process_document."""
+        """Backward compatibility"""
         return await self.process_document(document_data)
 
-    def clear_data(self, silent: bool = False) -> None:
-        """Delete collection content and recreate lazily when next ingest runs."""
-        try:
-            self.client.delete_collection(self.collection_name)
-            # Do not recreate here; we will create with correct dim after embeddings
-            self.chunks = []
-            self.ready = False
-            self.last_updated = None
-            if not silent:
-                logger.info("🗑️ Cleared all data for %s/%s", self.user_id, self.knowledge_base_id)
-        except Exception as e:
-            logger.error("Error clearing data: %s", e)
-
-    # -----------------------------
-    # Search & QA
-    # -----------------------------
-
     async def semantic_search(self, query: str, max_results: int = _DEF_SEARCH_LIMIT) -> List[Dict]:
+        """Semantic search with tenant filtering"""
         if not self.is_ready():
             return []
+        
         try:
-            # Query embedding
-            qr = genai.embed_content(model=self.model_name, content=query, task_type="retrieval_query")
-            qvec = qr["embedding"] if isinstance(qr, dict) else getattr(qr, "embedding", None)
+            qvec = await self._embed_text(query)
             if not qvec:
                 return []
 
-            res = self.client.search(
+            results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=qvec,
                 limit=max_results,
+                query_filter=self._tenant_filter(),
                 with_payload=True,
-                score_threshold=None,
             )
 
-            out: List[Dict] = []
-            for r in res:
+            output = []
+            for r in results:
                 payload = r.payload or {}
-                out.append(
-                    {
-                        "text": payload.get("content", ""),
-                        "metadata": {
-                            "source_url": payload.get("source_url", ""),
-                            "title": payload.get("title", ""),
-                            "chunk_index": payload.get("chunk_index", -1),
-                            "scraped_at": payload.get("scraped_at", ""),
-                        },
-                        "score": float(getattr(r, "score", 0.0) or 0.0),
-                    }
-                )
-            return out
+                output.append({
+                    "text": payload.get("text", ""),
+                    "metadata": {
+                        "source_url": payload.get("url", ""),
+                        "title": payload.get("title", ""),
+                        "chunk_index": payload.get("chunk_index", -1),
+                        "scraped_at": payload.get("scraped_at", ""),
+                    },
+                    "score": float(getattr(r, "score", 0.0) or 0.0),
+                })
+            return output
+
         except Exception as e:
-            logger.error("Error in semantic search: %s", e)
+            logger.error("Search error: %s", e)
             return []
 
     async def process_query(self, question: str, max_results: int = _DEF_SEARCH_LIMIT) -> Dict:
+        """Process query with search and answer generation"""
         if not self.is_ready():
             return {
                 "answer": "Knowledge base is not ready. Please process some content first.",
                 "sources": [],
                 "confidence": 0.0,
             }
+
         try:
             chunks = await self.semantic_search(question, max_results)
             if not chunks:
-                return {"answer": "I couldn't find relevant information to answer your question.", "sources": [], "confidence": 0.0}
+                return {
+                    "answer": "I couldn't find relevant information to answer your question.",
+                    "sources": [],
+                    "confidence": 0.0
+                }
 
             context = "\n\n".join([c["text"] for c in chunks])
             sources = [c["metadata"] for c in chunks]
             answer = await self._generate_answer_google(question, context)
-            return {"answer": answer, "sources": sources, "confidence": 0.8}
+            
+            # Simple confidence from top score
+            confidence = chunks[0]["score"] if chunks else 0.0
+            
+            return {"answer": answer, "sources": sources, "confidence": confidence}
+
         except Exception as e:
-            logger.error("Error processing query: %s", e)
-            return {"answer": "Sorry, I encountered an error processing your question.", "sources": [], "confidence": 0.0}
+            logger.error("Query processing error: %s", e)
+            return {
+                "answer": "Sorry, I encountered an error processing your question.",
+                "sources": [],
+                "confidence": 0.0
+            }
 
     async def _generate_answer_google(self, question: str, context: str) -> str:
+        """Generate answer using Google Gemini"""
         try:
             model = genai.GenerativeModel("gemini-2.0-flash")
             prompt = (
-                "You are a helpful sales assistant. Based on the following information, concisely answer the customer's question and focus on how our features can help them.\n\n"
+                "You are a helpful sales assistant. Based on the following information, "
+                "concisely answer the customer's question and focus on how our features can help them.\n\n"
                 f"Information:\n{context}\n\n"
                 f"Customer Question: {question}\n\n"
                 "Answer as a knowledgeable sales assistant. If you don't have the specific information needed, say you'll get back to them."
             )
             resp = model.generate_content(prompt)
-            return getattr(resp, "text", None) or "I'll get back to you with that information. Please try again."
+            return getattr(resp, "text", None) or "I'll get back to you with that information."
         except Exception as e:
-            logger.error("Error generating answer with Google API: %s", e)
-            return "I'll get back to you with that information. Please try again."
-
-    # -----------------------------
-    # State helpers
-    # -----------------------------
+            logger.error("Answer generation error: %s", e)
+            return "I'll get back to you with that information."
 
     def is_ready(self) -> bool:
+        """Check if vector store is ready"""
         if not self.ready:
             try:
-                info = self.client.get_collection(self.collection_name)
-                count = int(getattr(info, "points_count", 0) or 0)
+                count = self.get_total_chunks()
                 if count > 0:
                     self.ready = True
             except Exception:
@@ -516,19 +490,32 @@ class MemcacheS3VectorStore:
         return self.ready
 
     def get_total_chunks(self) -> int:
+        """Get total chunks for this tenant+KB"""
         try:
-            info = self.client.get_collection(self.collection_name)
-            return int(getattr(info, "points_count", 0) or 0)
-        except Exception:
-            return len(self.chunks)
+            result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=self._tenant_filter(),
+            )
+            return int(result.count) if hasattr(result, "count") else 0
+        except Exception as e:
+            logger.warning("Count failed: %s", e)
+            return 0
 
-    def __del__(self):
+    def clear_data(self, silent: bool = False) -> None:
+        """Delete all data for this tenant+KB"""
         try:
-            if hasattr(self, "client") and self.client:
-                self.client.close()
-        except Exception:
-            pass
-
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=self._tenant_filter(),
+                wait=True,
+            )
+            self.ready = False
+            self.last_updated = None
+            if not silent:
+                logger.info("🗑️ Cleared all data for %s/%s", self.user_id, self.knowledge_base_id)
+        except Exception as e:
+            if not silent:
+                logger.error("Error clearing data: %s", e)
 
 # Backward compatibility alias
 SaaSVectorStore = MemcacheS3VectorStore
