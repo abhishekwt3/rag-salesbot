@@ -1,4 +1,4 @@
-# Updated docker-compose.yml
+# Simplified docker-compose.yml - Google + Weaviate
 
 services:
   backend:
@@ -12,39 +12,43 @@ services:
       - DB_NAME=salesdokdb
       - DB_USER=postgres
       - DB_PASSWORD=${DB_PASSWORD}
-      - MEMCACHE_HOST=memcache
-      - MEMCACHE_PORT=11211
       - TRANSFORMERS_CACHE=/app/cache
       - HF_HOME=/app/cache
       - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
-      - GCS_EMBEDDINGS_BUCKET=${GCS_EMBEDDINGS_BUCKET}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-service-account.json
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
-      # Fix temp directory path
       - TMPDIR=/app/tmp
+      # Weaviate configuration
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
     volumes:
       - transformers_cache:/app/cache
       - playwright_cache:/home/appuser/.cache/ms-playwright
-      # Add volumes for file uploads and temp storage
       - upload_storage:/app/uploads
       - temp_storage:/app/tmp
-       # Mount GCS service account key file
-      - ./gcs-service-account.json:/app/gcs-service-account.json:ro
-
     depends_on:
-      - memcache
+      - weaviate
     restart: unless-stopped
     networks:
       - saas-network
 
-  memcache:
-    image: memcached:1.6-alpine
-    container_name: saas-memcache
-    expose:
-      - "11211"
-    command: memcached -m 256 -v
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
+    container_name: weaviate
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      - QUERY_DEFAULTS_LIMIT=25
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=none
+      - ENABLE_MODULES=
+      - CLUSTER_HOSTNAME=node1
+      - GRPC_PORT=50051
+    volumes:
+      - weaviate_data:/var/lib/weaviate
     restart: unless-stopped
     networks:
       - saas-network
@@ -56,5 +60,6 @@ networks:
 volumes:
   transformers_cache:
   playwright_cache:
-  upload_storage:    # For uploaded files
-  temp_storage:      # For temporary processing
+  upload_storage:
+  temp_storage:
+  weaviate_data:

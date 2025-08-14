@@ -1,90 +1,266 @@
-# simple_scraper.py - Advanced web scraper for dynamic content (Next.js, React, SPAs)
+# Usage example is at the bottom. Run:  python simple_scraper.py
+
 import asyncio
 import logging
+import random
 import time
-from typing import List, Dict, Optional, Set
-from urllib.parse import urljoin, urlparse
+import hashlib
+import io
+from typing import List, Dict, Optional, Callable, Any, Set, Tuple
+from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
+
 import re
-
-from playwright.async_api import async_playwright, Page, BrowserContext
 from bs4 import BeautifulSoup
-import httpx
-from posthog import page
 
-logger = logging.getLogger(__name__)
+# Optional imports (graceful degradation)
+try:
+    import trafilatura  # for high-quality text/boilerplate removal
+except Exception:  # pragma: no cover
+    trafilatura = None
 
-class AdvancedWebScraper:
-    """Advanced web scraper that handles dynamic content, SPAs, and JavaScript-heavy sites"""
+try:
+    from pdfminer.high_level import extract_text as pdf_extract_text  # for PDFs
+except Exception:  # pragma: no cover
+    pdf_extract_text = None
+
+try:
+    import httpx  # static fallback client
+except Exception:  # pragma: no cover
+    httpx = None
+
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+import urllib.robotparser as robotparser
+
+logger = logging.getLogger("enhanced_scraper")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+# ----------------------------- Utilities -----------------------------
+
+def normalize_url(url: str) -> str:
+    """Normalize URL (scheme/host lowercase, sorted query, remove fragments)."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower() or "http"
+    netloc = parsed.netloc.lower()
+    path = re.sub(r"/{2,}", "/", parsed.path)  # collapse multiple slashes
+    query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def is_probably_pdf(url: str, headers: Optional[Dict[str, str]] = None) -> bool:
+    if url.lower().endswith(".pdf"):
+        return True
+    if headers:
+        ct = headers.get("content-type", "").lower()
+        return "application/pdf" in ct
+    return False
+
+
+def random_user_agent() -> str:
+    ua_pool = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    ]
+    return random.choice(ua_pool)
+
+
+# ----------------------- Rate limiting & concurrency -----------------------
+
+class HostLimiter:
+    """Per-host concurrency + simple rate limiting."""
+    def __init__(self, max_concurrent: int = 3, min_interval_ms: int = 200):
+        self.max_concurrent = max_concurrent
+        self.min_interval_ms = min_interval_ms
+        self.semaphores: Dict[str, asyncio.Semaphore] = {}
+        self.last_hit_ms: Dict[str, float] = {}
+
+    async def throttle(self, host: str):
+        sem = self.semaphores.setdefault(host, asyncio.Semaphore(self.max_concurrent))
+        async with sem:
+            now = time.time() * 1000
+            last = self.last_hit_ms.get(host, 0)
+            delta = now - last
+            if delta < self.min_interval_ms:
+                await asyncio.sleep((self.min_interval_ms - delta) / 1000.0)
+            self.last_hit_ms[host] = time.time() * 1000
+
+
+# ----------------------------- Robots manager -----------------------------
+
+class RobotsManager:
+    def __init__(self, user_agent: str = "Mozilla/5.0 (compatible; SimpleScraper/1.0)"):
+        self.user_agent = user_agent
+        self.cache: Dict[str, robotparser.RobotFileParser] = {}
+
+    async def allowed(self, url: str) -> bool:
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        rp = self.cache.get(base)
+        if not rp:
+            rp = robotparser.RobotFileParser()
+            robots_url = urljoin(base, "/robots.txt")
+            # Fetch robots.txt using httpx if available; otherwise allow by default
+            try:
+                if httpx:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r = await client.get(robots_url, headers={"User-Agent": self.user_agent})
+                        if r.status_code == 200:
+                            rp.parse(r.text.splitlines())
+                        else:
+                            # If no robots or error, default allow (conservative dev choice: allow)
+                            rp.parse(["User-agent: *", "Allow: /"])
+                else:
+                    rp.parse(["User-agent: *", "Allow: /"])
+            except Exception:
+                rp.parse(["User-agent: *", "Allow: /"])
+            self.cache[base] = rp
+        return rp.can_fetch(self.user_agent, url)
+
+
+# ----------------------------- Framework Detection -----------------------------
+
+class FrameworkDetector:
+    """Detect website framework and return appropriate scraping strategy"""
     
-    def __init__(self):
-        self.browser = None
-        self.context = None
-        self.page = None
-        
-    async def scrape_website(self, base_url: str, config: Dict) -> List[Dict]:
-        """
-        Scrape website content with advanced JavaScript handling
-        
-        Args:
-            base_url: Starting URL to scrape
-            config: Configuration dictionary with scraping parameters
-            
-        Returns:
-            List of page dictionaries with content
-        """
-        pages = []
-        
+    @staticmethod
+    async def detect_framework(page: Page, url: str) -> str:
+        """Detect if the website is a SPA, React, Next.js, or static site"""
         try:
-            # Initialize Playwright browser
-            await self._init_browser()
+            # Check for framework indicators
+            framework_check = await page.evaluate("""
+                () => {
+                    const indicators = {
+                        nextjs: !!(window.__NEXT_DATA__ || document.querySelector('#__next') || 
+                                  document.querySelector('[data-nextjs-page]')),
+                        react: !!(window.React || document.querySelector('[data-reactroot]') || 
+                                 document.querySelector('#root')),
+                        spa: !!(document.querySelector('[data-reactroot]') || 
+                               document.querySelector('#__next') || 
+                               document.querySelector('#root') ||
+                               document.querySelector('[ng-app]') ||
+                               document.querySelector('[data-ng-app]'))
+                    };
+                    
+                    if (indicators.nextjs) return 'nextjs';
+                    if (indicators.react) return 'react';
+                    if (indicators.spa) return 'spa';
+                    return 'static';
+                }
+            """)
             
-            if config.get('single_page_mode', False):
-                # Single page mode - scrape just the given URL
-                page_content = await self._scrape_single_page_dynamic(base_url)
-                if page_content:
-                    pages.append(page_content)
-            else:
-                # Multi-page mode - discover and scrape multiple pages
-                pages = await self._scrape_multiple_pages_dynamic(base_url, config)
-                
+            logger.info(f"🔍 Detected framework: {framework_check} for {url}")
+            return framework_check
+            
         except Exception as e:
-            logger.error(f"Error scraping website {base_url}: {e}")
-            
-        finally:
-            await self._cleanup()
-            
-        return pages
-    
-    async def _init_browser(self):
-        """Initialize Playwright browser with optimized settings"""
-        playwright = await async_playwright().start()
-        
-        # Launch browser with optimizations for scraping
-        self.browser = await playwright.chromium.launch(
+            logger.debug(f"Framework detection failed: {e}")
+            return 'static'
+
+
+# ----------------------------- Enhanced Scraper core -----------------------------
+
+class ScrapedPage:
+    def __init__(self, url: str, final_url: str, status: int, html: str, text: str,
+                 title: Optional[str], meta_desc: Optional[str], meta: Dict[str, str],
+                 framework: str = 'static'):
+        self.url = url
+        self.final_url = final_url
+        self.status = status
+        self.html = html
+        self.text = text
+        self.title = title
+        self.meta_desc = meta_desc
+        self.meta = meta  # og:title, og:description, canonical, etc.
+        self.framework = framework
+        self.hash = content_hash(text or html or "")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "url": self.url,
+            "final_url": self.final_url,
+            "status": self.status,
+            "hash": self.hash,
+            "title": self.title,
+            "meta_desc": self.meta_desc,
+            "meta": self.meta,
+            "text": self.text,
+            "html": self.html,
+            "framework": self.framework,
+            "word_count": len(self.text.split()) if self.text else 0
+        }
+
+
+class EnhancedSimpleScraper:
+    def __init__(self,
+                 max_retries: int = 3,
+                 wait_selector: Optional[str] = "body",
+                 host_max_concurrent: int = 3,
+                 host_min_interval_ms: int = 200,
+                 respect_robots: bool = True,
+                 enable_resource_blocking: bool = True,
+                 on_result: Optional[Callable[[str, ScrapedPage], Any]] = None):
+        self.max_retries = max_retries
+        self.wait_selector = wait_selector
+        self.enable_resource_blocking = enable_resource_blocking
+        self.playwright = None
+        self.browser: Optional[Browser] = None
+        self.host_limiter = HostLimiter(host_max_concurrent, host_min_interval_ms)
+        self.robots = RobotsManager() if respect_robots else None
+        self.on_result = on_result  # callback (tenant_id, page)
+
+        # Dedup across a run
+        self.seen_urls: Set[str] = set()
+
+    # -------- Playwright lifecycle --------
+    async def _ensure_browser(self):
+        if self.playwright and self.browser:
+            return
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(
             headless=True,
             args=[
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--disable-extensions',
-                '--disable-default-apps'
-            ]
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-default-apps",
+                "--no-first-run",
+            ],
         )
-        
-        # Create context with realistic user agent and settings
-        self.context = await self.browser.new_context(
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            viewport={'width': 1920, 'height': 1080},
+        logger.info("🚀 Enhanced Playwright browser started.")
+
+    async def _close_browser(self):
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
+        logger.info("🛑 Enhanced Playwright browser closed.")
+
+    async def _new_context(self) -> BrowserContext:
+        assert self.browser is not None
+        context = await self.browser.new_context(
+            user_agent=random_user_agent(),
+            viewport={"width": 1920, "height": 1080},
             java_script_enabled=True,
-            ignore_https_errors=True
+            ignore_https_errors=True,
         )
         
-        # Set up request interception to block unnecessary resources
-        await self.context.route("**/*", self._handle_route)
-        
+        # Set up resource blocking for performance
+        if self.enable_resource_blocking:
+            await context.route("**/*", self._handle_route)
+            logger.info("🚫 Resource blocking enabled for performance")
+            
+        return context
+
     async def _handle_route(self, route):
-        """Handle route interception to optimize loading"""
+        """Handle route interception to block unnecessary resources for 3-5x performance boost"""
         request = route.request
         resource_type = request.resource_type
         
@@ -93,435 +269,304 @@ class AdvancedWebScraper:
             await route.abort()
         else:
             await route.continue_()
-    
-    async def _scrape_single_page_dynamic(self, url: str) -> Optional[Dict]:
-        """Scrape with better timeout handling"""
+
+    # -------- Public API --------
+    async def scrape_multi_tenant(self, jobs: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        jobs: [{ "tenant_id": str, "urls": [..] }]
+        returns { tenant_id: [ScrapedPage.dict(), ...] }
+        """
+        await self._ensure_browser()
         try:
-            page = await self.context.new_page()
-            logger.info(f"📄 Scraping: {url}")        
-            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
-            await page.wait_for_timeout(2000)
-            page_data = await self._extract_page_content_dynamic(page, url)
-            await page.close()
-            return page_data
-        
-        except Exception as e:
-            logger.error(f"Error scraping {url}: {e}")
-            if page:
-                try:
-                    await page.close()
-                except:
-                    pass
-            return None
-    
-    async def _scrape_multiple_pages_dynamic(self, base_url: str, config: Dict) -> List[Dict]:
-        """Scrape multiple pages with JavaScript support"""
-        pages = []
-        visited_urls: Set[str] = set()
-        urls_to_visit = [base_url]
-        max_pages = config.get('max_pages', 50)
-        include_patterns = config.get('include_patterns', [])
-        exclude_patterns = config.get('exclude_patterns', ['/blog', '/news'])
-        
-        domain = urlparse(base_url).netloc
-        
+            tasks = [self._scrape_job(job) for job in jobs]
+            results = await asyncio.gather(*tasks)
+            return {job["tenant_id"]: pages for job, pages in zip(jobs, results)}
+        finally:
+            await self._close_browser()
+
+    # -------- Single tenant --------
+    async def _scrape_job(self, job: Dict[str, Any]) -> List[Dict[str, Any]]:
+        tenant_id = job["tenant_id"]
+        urls: List[str] = [normalize_url(u) for u in job.get("urls", [])]
+        # Deduplicate input URLs
+        unique_urls = []
+        seen = set()
+        for u in urls:
+            if u not in seen:
+                unique_urls.append(u)
+                seen.add(u)
+
+        ctx = await self._new_context()
+        page = await ctx.new_page()
+
+        results: List[Dict[str, Any]] = []
         try:
-            page = await self.context.new_page()
-            
-            while urls_to_visit and len(pages) < max_pages:
-                current_url = urls_to_visit.pop(0)
-                
-                if current_url in visited_urls:
+            for i, url in enumerate(unique_urls):
+                if url in self.seen_urls:
                     continue
-                    
-                visited_urls.add(current_url)
-                
-                # Check if URL should be excluded
-                if self._should_exclude_url(current_url, exclude_patterns):
-                    continue
-                
-                # Check if URL should be included (if patterns specified)
-                if include_patterns and not self._should_include_url(current_url, include_patterns):
-                    continue
-                
-                logger.info(f"🔍 Scraping page {len(pages) + 1}/{max_pages}: {current_url}")
-                
-                try:
-                    # Navigate to page
-                    await page.goto(current_url, wait_until='domcontentloaded', timeout=15000)
-                    await page.wait_for_timeout(2000)
-                    
-                    # Wait for dynamic content
-                    await self._wait_for_dynamic_content(page)
-                    
-                    # Extract page content
-                    page_data = await self._extract_page_content_dynamic(page, current_url)
-                    if page_data:
-                        pages.append(page_data)
-                    
-                    # Find more URLs to scrape (handle SPAs and dynamic links)
-                    if len(pages) < max_pages:
-                        new_urls = await self._extract_links_dynamic(page, current_url, domain)
-                        for url in new_urls:
-                            if url not in visited_urls and url not in urls_to_visit:
-                                urls_to_visit.append(url)
-                    
-                    # Rate limiting
-                    await asyncio.sleep(1)
-                    
-                except Exception as e:
-                    logger.error(f"Error scraping {current_url}: {e}")
-                    continue
-            
-            await page.close()
-                        
-        except Exception as e:
-            logger.error(f"Error in multi-page dynamic scraping: {e}")
-        
-        logger.info(f"✅ Scraped {len(pages)} pages from {base_url}")
-        return pages
-    
-    async def _wait_for_dynamic_content(self, page: Page):
-        """Wait for dynamic content to load using multiple strategies"""
-        try:
-            # Strategy 1: Wait for common loading indicators to disappear
-            loading_selectors = [
-                '[data-testid="loading"]',
-                '.loading',
-                '.spinner',
-                '.loader',
-                '[aria-label*="loading" i]',
-                '[aria-label*="Loading" i]'
-            ]
-            
-            for selector in loading_selectors:
-                try:
-                    await page.wait_for_selector(selector, state='detached', timeout=5000)
-                except:
-                    continue
-            
-            # Strategy 2: Wait for common content containers
-            content_selectors = [
-                'main',
-                '[role="main"]', 
-                '.content',
-                '#content',
-                '.main-content',
-                'article',
-                '.post-content',
-                '.page-content'
-            ]
-            
-            for selector in content_selectors:
-                try:
-                    await page.wait_for_selector(selector, timeout=3000)
-                    break
-                except:
-                    continue
-            
-            # Strategy 3: Wait for React/Next.js specific indicators
+                self.seen_urls.add(url)
+
+                # robots.txt
+                if self.robots:
+                    allowed = await self.robots.allowed(url)
+                    if not allowed:
+                        logger.info(f"🤖 Blocked by robots.txt: {url}")
+                        continue
+
+                logger.info(f"📄 Scraping page {i+1}/{len(unique_urls)} for {tenant_id}: {url}")
+                sp = await self._fetch_with_retries(page, url)
+                if sp:
+                    results.append(sp.to_dict())
+                    # callback for pipeline (e.g., push to Qdrant)
+                    if self.on_result:
+                        try:
+                            self.on_result(tenant_id, sp)
+                        except Exception as cb_err:
+                            logger.warning(f"⚠️ on_result callback error for {url}: {cb_err}")
+        finally:
+            await ctx.close()
+
+        return results
+
+    # -------- Enhanced Fetch logic with framework detection --------
+    async def _fetch_with_retries(self, page: Page, url: str) -> Optional[ScrapedPage]:
+        parsed = urlparse(url)
+        host = parsed.netloc
+
+        for attempt in range(1, self.max_retries + 1):
+            await self.host_limiter.throttle(host)
             try:
-                # Wait for React to be ready
-                await page.wait_for_function(
-                    "() => window.React || window.__NEXT_DATA__ || document.querySelector('[data-reactroot]')",
-                    timeout=5000
-                )
-            except:
-                pass
-            
-            # Strategy 4: Wait for network to be idle
-            try:
-                await page.wait_for_load_state('networkidle', timeout=10000)
-            except:
-                pass
-            
-            # Strategy 5: Additional wait for lazy-loaded content
-            await asyncio.sleep(2)
-            
-            # Strategy 6: Scroll to trigger lazy loading
-            await self._trigger_lazy_loading(page)
-            
-        except Exception as e:
-            logger.debug(f"Dynamic content waiting completed with some timeouts: {e}")
-    
-    async def _trigger_lazy_loading(self, page: Page):
-        """Scroll through page to trigger lazy loading"""
-        try:
-            # Get page height
-            page_height = await page.evaluate("document.body.scrollHeight")
-            
-            # Scroll in steps to trigger lazy loading
-            steps = min(5, max(2, page_height // 1000))
-            for i in range(steps):
-                scroll_to = (page_height // steps) * (i + 1)
-                await page.evaluate(f"window.scrollTo(0, {scroll_to})")
-                await asyncio.sleep(1)
-            
-            # Scroll back to top
-            await page.evaluate("window.scrollTo(0, 0)")
-            await asyncio.sleep(1)
-            
-        except Exception as e:
-            logger.debug(f"Lazy loading trigger failed: {e}")
-    
-    async def _extract_page_content_dynamic(self, page: Page, url: str) -> Optional[Dict]:
-        """Extract content from a dynamically loaded page"""
-        try:
-            # Get page title
-            title = await page.title()
-            if not title:
-                title = url
-            
-            # Get page content using multiple strategies
-            content = await self._extract_content_strategies(page)
-            
-            # Clean up content
-            content = self._clean_content(content)
-            
-            if content and len(content.strip()) > 100:  # Minimum content length
-                return {
-                    'url': url,
-                    'title': title.strip(),
-                    'content': content,
-                    'scraped_at': time.time()
-                }
+                # First try Playwright (dynamic content)
+                logger.info(f"🌐 [{host}] Attempt {attempt}: Enhanced Playwright GET {url}")
+                resp = await page.goto(url, wait_until="networkidle", timeout=60000)
+                status = resp.status if resp else 0
+
+                # Detect framework type
+                framework = await FrameworkDetector.detect_framework(page, url)
                 
-        except Exception as e:
-            logger.error(f"Error extracting content from {url}: {e}")
-            
+                # Framework-specific waiting and content extraction
+                await self._wait_for_framework_content(page, framework)
+
+                # Try to click common consent banners (best-effort, no fail)
+                await self._dismiss_consent(page)
+
+                html = await page.content()
+                final_url = page.url
+
+                # Framework-aware content extraction
+                text, title, meta_desc, meta = await self._extract_content_enhanced(page, html, final_url, framework)
+
+                # Heuristic: if text is too small, fallback to static client (maybe JS blocked)
+                if (not text or len(text) < 200) and httpx is not None:
+                    logger.info(f"📉 [{host}] Dynamic content thin; trying static fallback for {url}")
+                    static_page = await self._fetch_static(url)
+                    if static_page:
+                        return static_page
+
+                return ScrapedPage(url=url, final_url=final_url, status=status, html=html,
+                                   text=text, title=title, meta_desc=meta_desc, meta=meta, framework=framework)
+
+            except Exception as e:
+                logger.warning(f"⚠️ [{host}] Attempt {attempt} failed for {url}: {e}")
+                await asyncio.sleep(self._backoff(attempt))
+
+        # As a final fallback, try static client if available
+        if httpx is not None:
+            logger.info(f"🔄 [{host}] Final fallback: static fetch for {url}")
+            return await self._fetch_static(url)
+
         return None
-    
-    async def _extract_content_strategies(self, page: Page) -> str:
-        """Use multiple strategies to extract content"""
-        content_parts = []
-        
+
+    async def _wait_for_framework_content(self, page: Page, framework: str):
+        """Wait for framework-specific content to load"""
         try:
-            # Strategy 1: Try to get structured data (JSON-LD, etc.)
-            structured_content = await self._extract_structured_data(page)
-            if structured_content:
-                content_parts.append(structured_content)
-            
-            # Strategy 2: Extract from main content areas
-            main_content = await self._extract_main_content(page)
-            if main_content:
-                content_parts.append(main_content)
-            
-            # Strategy 3: Extract from Next.js specific patterns
-            nextjs_content = await self._extract_nextjs_content(page)
-            if nextjs_content:
-                content_parts.append(nextjs_content)
-            
-            # Strategy 4: Extract from React components
-            react_content = await self._extract_react_content(page)
-            if react_content:
-                content_parts.append(react_content)
-            
-            # Strategy 5: Fallback to body content
-            if not content_parts:
-                body_content = await page.evaluate("""
-                    () => {
-                        // Remove script and style elements
-                        const scripts = document.querySelectorAll('script, style, nav, header, footer, aside');
-                        scripts.forEach(el => el.remove());
-                        
-                        return document.body ? document.body.innerText : '';
-                    }
-                """)
-                if body_content:
-                    content_parts.append(body_content)
+            if framework == 'nextjs':
+                logger.info("⚛️ Waiting for Next.js content...")
+                # Wait for Next.js specific elements
+                await page.wait_for_function(
+                    "() => window.__NEXT_DATA__ || document.querySelector('#__next')",
+                    timeout=20000
+                )
+                # Wait for main content container
+                await page.wait_for_selector("#__next", timeout=15000)
+                
+            elif framework == 'react':
+                logger.info("⚛️ Waiting for React content...")
+                # Wait for React root
+                await page.wait_for_function(
+                    "() => document.querySelector('#root') || document.querySelector('[data-reactroot]')",
+                    timeout=20000
+                )
+                await page.wait_for_selector("#root, [data-reactroot]", timeout=15000)
+                
+            elif framework == 'spa':
+                logger.info("🔄 Waiting for SPA content...")
+                # Generic SPA waiting
+                await page.wait_for_function(
+                    "() => document.querySelector('#root') || document.querySelector('#__next') || document.querySelector('[data-reactroot]')",
+                    timeout=20000
+                )
+                
+            # Wait for loading indicators to disappear (all frameworks)
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const loadingElements = document.querySelectorAll(
+                            '[class*="loading"], [class*="spinner"], [class*="loader"], [aria-label*="loading"], [aria-label*="Loading"]'
+                        );
+                        const visibleLoaders = Array.from(loadingElements).filter(el => 
+                            el.offsetWidth > 0 && el.offsetHeight > 0
+                        );
+                        return visibleLoaders.length === 0;
+                    }""",
+                    timeout=15000
+                )
+                logger.info("✅ Loading indicators cleared")
+            except Exception:
+                logger.debug("⚠️ Loading indicator check timed out (proceeding anyway)")
+                
+            # Basic content wait
+            if self.wait_selector:
+                try:
+                    await page.wait_for_selector(self.wait_selector, timeout=15000)
+                except Exception:
+                    pass
+
+            # Additional wait for content to stabilize
+            await asyncio.sleep(3)
             
         except Exception as e:
-            logger.error(f"Error in content extraction strategies: {e}")
+            logger.debug(f"⚠️ Framework-specific waiting failed: {e}")
+
+    async def _extract_content_enhanced(self, page: Page, html: str, url: str, framework: str) -> Tuple[str, Optional[str], Optional[str], Dict[str, str]]:
+        """Enhanced content extraction with framework-specific strategies"""
         
-        return '\n\n'.join(content_parts)
-    
-    async def _extract_structured_data(self, page: Page) -> str:
-        """Extract structured data (JSON-LD, microdata)"""
+        # Try framework-specific extraction first
+        if framework in ['nextjs', 'react', 'spa']:
+            text = await self._extract_spa_content(page)
+            if text and len(text) > 200:
+                # Use the SPA-extracted text
+                pass
+            else:
+                # Fallback to trafilatura if SPA extraction failed
+                text = self._extract_with_trafilatura(html, url)
+        else:
+            # Static site - use trafilatura
+            text = self._extract_with_trafilatura(html, url)
+
+        # Extract metadata from HTML
+        soup = BeautifulSoup(html, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else None
+        
+        meta_desc = None
+        og_title = og_desc = canonical = None
+        for m in soup.find_all("meta"):
+            if m.get("name", "").lower() == "description" and m.get("content"):
+                meta_desc = m["content"].strip()
+            if m.get("property") == "og:title" and m.get("content"):
+                og_title = m["content"].strip()
+            if m.get("property") == "og:description" and m.get("content"):
+                og_desc = m["content"].strip()
+                
+        link_canon = soup.find("link", rel=lambda v: v and "canonical" in v.lower())
+        if link_canon and link_canon.get("href"):
+            canonical = urljoin(url, link_canon["href"].strip())
+
+        meta = {
+            "og:title": og_title or "",
+            "og:description": og_desc or "",
+            "canonical": canonical or "",
+        }
+        
+        # Enhanced content cleaning
+        text = self._clean_content_enhanced(text)
+        
+        return text, title, meta_desc, meta
+
+    async def _extract_spa_content(self, page: Page) -> str:
+        """Extract content from React/Next.js/SPA applications"""
         try:
-            structured_data = await page.evaluate("""
+            content = await page.evaluate("""
                 () => {
-                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-                    let content = '';
-                    
-                    jsonLdScripts.forEach(script => {
-                        try {
-                            const data = JSON.parse(script.textContent);
-                            if (data.description) content += data.description + '\\n';
-                            if (data.text) content += data.text + '\\n';
-                            if (data.articleBody) content += data.articleBody + '\\n';
-                        } catch (e) {}
-                    });
-                    
-                    return content;
-                }
-            """)
-            return structured_data
-        except:
-            return ""
-    
-    async def _extract_main_content(self, page: Page) -> str:
-        """Extract from main content areas"""
-        try:
-            main_content = await page.evaluate("""
-                () => {
+                    // Strategy 1: Try React/Next.js containers first
+                    const containers = [
+                        document.getElementById('__next'),
+                        document.getElementById('root'),
+                        document.querySelector('[data-reactroot]'),
+                        document.querySelector('main'),
+                        document.querySelector('[role="main"]')
+                    ].filter(Boolean);
+
+                    for (const container of containers) {
+                        if (container) {
+                            const clone = container.cloneNode(true);
+                            
+                            // Remove scripts, styles, nav elements, and common UI elements
+                            const unwanted = clone.querySelectorAll(
+                                'script, style, noscript, nav, header, footer, aside, ' +
+                                '[class*="nav"], [class*="menu"], [class*="sidebar"], ' +
+                                '[class*="header"], [class*="footer"], [role="navigation"], ' +
+                                '[class*="cookie"], [class*="banner"]'
+                            );
+                            unwanted.forEach(el => el.remove());
+
+                            const text = clone.innerText || clone.textContent || '';
+                            if (text.length > 200) {
+                                return text;
+                            }
+                        }
+                    }
+
+                    // Strategy 2: Try main content areas
                     const selectors = [
-                        'main', 
-                        '[role="main"]', 
-                        '.content', 
-                        '#content',
-                        '.main-content', 
-                        '#main-content', 
-                        'article',
-                        '.post-content', 
-                        '.entry-content',
-                        '.page-content'
+                        'main', 'article', '.content', '.main-content', 
+                        '.page-content', '[role="main"]', '.container'
                     ];
                     
                     for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            // Remove unwanted elements
-                            const unwanted = element.querySelectorAll('script, style, nav, header, footer, aside, .ad, .advertisement');
-                            unwanted.forEach(el => el.remove());
-                            
-                            return element.innerText;
-                        }
-                    }
-                    return '';
-                }
-            """)
-            return main_content
-        except:
-            return ""
-    
-    async def _extract_nextjs_content(self, page: Page) -> str:
-        """Extract content from Next.js specific patterns"""
-        try:
-            nextjs_content = await page.evaluate("""
-                () => {
-                    // Try to get content from Next.js data
-                    if (window.__NEXT_DATA__) {
-                        try {
-                            const data = window.__NEXT_DATA__;
-                            let content = '';
-                            
-                            // Extract from page props
-                            if (data.props && data.props.pageProps) {
-                                const props = data.props.pageProps;
-                                if (props.content) content += props.content + '\\n';
-                                if (props.description) content += props.description + '\\n';
-                                if (props.body) content += props.body + '\\n';
+                        const elements = document.querySelectorAll(selector);
+                        for (const element of elements) {
+                            const text = element.innerText || element.textContent || '';
+                            if (text.length > 200) {
+                                return text;
                             }
-                            
-                            return content;
-                        } catch (e) {
-                            return '';
                         }
                     }
+
+                    // Strategy 3: Last resort - body text with cleanup
+                    const bodyClone = document.body.cloneNode(true);
+                    const unwanted = bodyClone.querySelectorAll(
+                        'script, style, noscript, nav, header, footer, aside, ' +
+                        '[class*="nav"], [class*="menu"], [class*="sidebar"]'
+                    );
+                    unwanted.forEach(el => el.remove());
                     
-                    // Look for Next.js app container
-                    const nextRoot = document.querySelector('#__next, [data-reactroot]');
-                    if (nextRoot) {
-                        const unwanted = nextRoot.querySelectorAll('script, style, nav, header, footer, aside');
-                        unwanted.forEach(el => el.remove());
-                        return nextRoot.innerText;
-                    }
-                    
-                    return '';
+                    return bodyClone.innerText || bodyClone.textContent || '';
                 }
             """)
-            return nextjs_content
-        except:
-            return ""
-    
-    async def _extract_react_content(self, page: Page) -> str:
-        """Extract content from React applications"""
-        try:
-            react_content = await page.evaluate("""
-                () => {
-                    // Look for React root containers
-                    const reactSelectors = [
-                        '#root',
-                        '#app', 
-                        '.app',
-                        '[data-reactroot]',
-                        '[data-react-helmet]'
-                    ];
-                    
-                    for (const selector of reactSelectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            // Remove unwanted elements
-                            const unwanted = element.querySelectorAll('script, style, nav, header, footer, aside, .sidebar');
-                            unwanted.forEach(el => el.remove());
-                            
-                            return element.innerText;
-                        }
-                    }
-                    return '';
-                }
-            """)
-            return react_content
-        except:
-            return ""
-    
-    async def _extract_links_dynamic(self, page: Page, current_url: str, domain: str) -> List[str]:
-        """Extract links from dynamically loaded page"""
-        try:
-            links = await page.evaluate("""
-                (domain) => {
-                    const links = Array.from(document.querySelectorAll('a[href]'));
-                    const validLinks = [];
-                    
-                    links.forEach(link => {
-                        try {
-                            const href = link.href;
-                            const url = new URL(href);
-                            
-                            // Only include links from the same domain
-                            if (url.hostname === domain) {
-                                // Clean up URL (remove fragments, etc.)
-                                const cleanUrl = url.origin + url.pathname;
-                                if (cleanUrl && !validLinks.includes(cleanUrl)) {
-                                    validLinks.push(cleanUrl);
-                                }
-                            }
-                        } catch (e) {}
-                    });
-                    
-                    return validLinks;
-                }
-            """, domain)
             
-            return links
+            return content or ""
             
         except Exception as e:
-            logger.error(f"Error extracting links: {e}")
-            return []
-    
-    def _should_exclude_url(self, url: str, exclude_patterns: List[str]) -> bool:
-        """Check if URL should be excluded based on patterns"""
-        for pattern in exclude_patterns:
-            if pattern in url:
-                return True
+            logger.error(f"❌ SPA content extraction error: {e}")
+            return ""
+
+    def _extract_with_trafilatura(self, html: str, url: str) -> str:
+        """Extract content using trafilatura"""
+        if trafilatura:
+            try:
+                extracted = trafilatura.extract(html, include_comments=False, url=url)
+                if extracted:
+                    return extracted
+            except Exception as e:
+                logger.debug(f"Trafilatura extraction failed: {e}")
         
-        # Additional exclusions for common non-content URLs
-        exclude_extensions = ['.pdf', '.jpg', '.png', '.gif', '.svg', '.css', '.js', '.xml', '.json']
-        for ext in exclude_extensions:
-            if url.lower().endswith(ext):
-                return True
-                
-        return False
-    
-    def _should_include_url(self, url: str, include_patterns: List[str]) -> bool:
-        """Check if URL should be included based on patterns"""
-        for pattern in include_patterns:
-            if pattern in url:
-                return True
-        return False
-    
-    def _clean_content(self, content: str) -> str:
-        """Clean up extracted content"""
+        # Fallback to BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        return soup.get_text(separator=" ", strip=True)
+
+    def _clean_content_enhanced(self, content: str) -> str:
+        """Enhanced content cleaning for modern web frameworks"""
         if not content:
             return ""
         
@@ -529,7 +574,7 @@ class AdvancedWebScraper:
         content = re.sub(r'\n\s*\n', '\n\n', content)
         content = re.sub(r'[ \t]+', ' ', content)
         
-        # Remove common boilerplate text
+        # Remove common boilerplate text patterns
         lines = content.split('\n')
         cleaned_lines = []
         
@@ -537,39 +582,154 @@ class AdvancedWebScraper:
             line = line.strip()
             
             # Skip empty lines and very short lines
-            if len(line) < 3:
+            if len(line) < 5:
                 continue
                 
-            # Skip common navigation/footer text
+            # Skip common UI/navigation text (enhanced patterns)
             skip_patterns = [
-                'home', 'about', 'contact', 'privacy', 'terms',
-                'cookie', 'subscribe', 'newsletter', 'follow us',
+                'home', 'about', 'contact', 'privacy', 'terms', 'policy',
+                'cookie', 'subscribe', 'newsletter', 'follow us', 'social',
                 'copyright', '©', 'all rights reserved', 'skip to',
-                'menu', 'search', 'login', 'sign up', 'cart'
+                'menu', 'search', 'login', 'sign up', 'cart', 'checkout',
+                'loading', 'please wait', 'javascript', 'enable', 'browser',
+                'back to top', 'scroll', 'click here', 'read more',
+                'share', 'tweet', 'facebook', 'instagram', 'linkedin'
             ]
             
             if len(line) < 50 and any(pattern in line.lower() for pattern in skip_patterns):
                 continue
             
-            # Skip lines that are mostly symbols or numbers
-            if len(re.sub(r'[^a-zA-Z]', '', line)) < len(line) * 0.5:
+            # Skip lines that are mostly symbols, numbers, or very repetitive
+            alpha_ratio = len(re.sub(r'[^a-zA-Z]', '', line)) / len(line)
+            if alpha_ratio < 0.5 and len(line) < 100:
                 continue
+            
+            # Skip very repetitive lines (like navigation items)
+            words = line.lower().split()
+            if len(words) > 1:
+                unique_words = set(words)
+                if len(unique_words) / len(words) < 0.5 and len(line) < 100:
+                    continue
             
             cleaned_lines.append(line)
         
-        return '\n'.join(cleaned_lines)
-    
-    async def _cleanup(self):
-        """Clean up browser resources"""
-        try:
-            if self.context:
-                await self.context.close()
-            if self.browser:
-                await self.browser.close()
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        # Join and final cleanup
+        content = '\n'.join(cleaned_lines)
+        content = re.sub(r'\n{3,}', '\n\n', content)  # Max 2 consecutive newlines
+        
+        # Limit content length to prevent huge pages
+        if len(content) > 20000:
+            content = content[:20000] + "..."
+            
+        return content.strip()
+
+    async def _fetch_static(self, url: str) -> Optional[ScrapedPage]:
+        if httpx is None:
+            return None
+        headers = {"User-Agent": random_user_agent(), "Accept": "*/*"}
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            r = await client.get(url, headers=headers)
+            status = r.status_code
+            final_url = str(r.url)
+            # PDF handling
+            if is_probably_pdf(final_url, r.headers):
+                text = ""
+                if pdf_extract_text:
+                    try:
+                        text = pdf_extract_text(io.BytesIO(r.content))  # type: ignore
+                    except Exception:
+                        text = ""
+                html = ""
+                return ScrapedPage(url=url, final_url=final_url, status=status, html=html,
+                                   text=text, title="PDF Document", meta_desc=None, 
+                                   meta={}, framework="pdf")
+            else:
+                html = r.text
+                text = self._extract_with_trafilatura(html, final_url)
+                soup = BeautifulSoup(html, "html.parser")
+                title = soup.title.string.strip() if soup.title and soup.title.string else None
+                return ScrapedPage(url=url, final_url=final_url, status=status, html=html,
+                                   text=text, title=title, meta_desc=None, 
+                                   meta={}, framework="static")
+        return None
+
+    # -------- Helpers --------
+    def _backoff(self, attempt: int) -> float:
+        # Exponential backoff with jitter
+        base = 0.5 * (2 ** (attempt - 1))
+        return base + random.uniform(0, 0.5)
+
+    async def _dismiss_consent(self, page: Page):
+        # Best-effort: click common consent/accept buttons if present
+        selectors = [
+            "button:has-text('Accept All')",
+            "button:has-text('I Agree')",
+            "button:has-text('Accept')",
+            "button[aria-label='Accept']",
+            "text=Accept all cookies",
+            "[id*='cookie'] button",
+            "[class*='cookie'] button",
+            "[id*='consent'] button",
+            "[class*='consent'] button",
+        ]
+        for sel in selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    await el.click(timeout=2000)
+                    await asyncio.sleep(0.5)
+                    logger.debug(f"✅ Dismissed consent banner with selector: {sel}")
+                    break
+            except Exception:
+                continue
+
 
 # Maintain backward compatibility
-class HybridScraper(AdvancedWebScraper):
-    """Backward compatible alias for AdvancedWebScraper"""
+class SimpleScraper(EnhancedSimpleScraper):
+    """Backward compatible alias for EnhancedSimpleScraper"""
     pass
+
+
+# ----------------------------- Example run -----------------------------
+
+async def main():
+    scraper = EnhancedSimpleScraper(
+        max_retries=3,
+        wait_selector="body",
+        host_max_concurrent=3,
+        host_min_interval_ms=200,
+        respect_robots=True,
+        enable_resource_blocking=True,  # 3-5x performance boost
+        on_result=lambda tenant, page: logger.info(f"🔗 [PIPELINE] {tenant} <- {page.final_url} ({page.framework}, {page.to_dict()['word_count']} words)"),
+    )
+
+    jobs = [
+        {
+            "tenant_id": "tenant_a",
+            "urls": [
+                "https://atomberg.com/atomberg-renesa-prime-bldc-motor-3-blade-ceiling-fan",
+                "https://www.wikipedia.org/",
+                "https://nextjs.org/",  # Next.js site
+                "https://react.dev/",   # React site
+            ],
+        },
+        {
+            "tenant_id": "tenant_b",
+            "urls": [
+                "https://example.com/",
+            ],
+        },
+    ]
+
+    results = await scraper.scrape_multi_tenant(jobs)
+    for tenant, pages in results.items():
+        logger.info(f"🎯 Tenant {tenant} scraped {len(pages)} pages")
+        for p in pages:
+            logger.info(f"   📄 {p['final_url']} | status={p['status']} | framework={p['framework']} | title={p.get('title')} | words={p['word_count']}")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 Interrupted by user.")

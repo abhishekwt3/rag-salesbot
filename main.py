@@ -1,4 +1,4 @@
-# main.py - SaaS Multi-tenant RAG Chatbot API
+# main.py - SaaS Multi-tenant RAG Chatbot API (Enhanced Scraper)
 import os
 import logging
 from typing import List
@@ -14,8 +14,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.responses import Response , RedirectResponse
+from fastapi.responses import Response, RedirectResponse
 from typing import List, Dict
 import uvicorn
 import uuid
@@ -33,22 +32,24 @@ from schemas import (
 )
 from sqlalchemy.orm import Session
 
-# Import the vector store and scraper
-from saas_embeddings import SaaSVectorStore
-from simple_scraper import HybridScraper as WebScraper
+# Import the enhanced vector store and scraper
+from saas_embeddings import MemcacheS3VectorStore
+from simple_scraper import EnhancedSimpleScraper as WebScraper
 
 # Import Google OAuth
 from google_oauth import GoogleOAuth, get_google_oauth_endpoints
-
-from saas_embeddings import MemcacheS3VectorStore 
 
 import httpx
 
 def validate_environment():
     """Validate required environment variables"""
     required_vars = [
-        'MEMCACHE_HOST',
+        'QDRANT_URL',
         'GOOGLE_API_KEY'
+    ]
+    
+    optional_vars = [
+        'QDRANT_API_KEY'  # Optional for local Qdrant
     ]
     
     missing_vars = []
@@ -57,13 +58,15 @@ def validate_environment():
             missing_vars.append(var)
     
     if missing_vars:
-        logger.warning(f"Missing environment variables: {missing_vars}")
+        logger.warning(f"Missing required environment variables: {missing_vars}")
         logger.warning("Some features may not work properly")
     
+    # Log optional variables
+    for var in optional_vars:
+        if not os.getenv(var):
+            logger.info(f"Optional environment variable not set: {var}")
+    
     return len(missing_vars) == 0
-
-# Add this after app initialization
-validate_environment()
 
 # Configure logging
 logging.basicConfig(
@@ -72,10 +75,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize database
+# Validate environment and initialize database
+validate_environment()
 init_database()
 
-app = FastAPI(title="SaaS RAG Chatbot API", version="3.0.0")
+app = FastAPI(title="SaaS RAG Chatbot API", version="4.1.0")
 
 # CORS middleware
 app.add_middleware(
@@ -86,18 +90,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Vector store manager for multi-tenant support
+# Enhanced Vector store manager with scraper integration
 class SaaSVectorManager:
     def __init__(self):
         self.vector_stores = {}  # user_id -> knowledge_base_id -> vector_store
+        # Initialize enhanced scraper with optimized settings
+        self.scraper = WebScraper(
+            max_retries=3,
+            host_max_concurrent=2,  # Conservative for shared hosting
+            host_min_interval_ms=500,  # Slower for politeness
+            respect_robots=True,
+            enable_resource_blocking=True,  # 3-5x performance boost
+            on_result=self._on_scrape_result
+        )
+        
+    def _on_scrape_result(self, tenant_id: str, page):
+        """Callback when a page is successfully scraped"""
+        logger.info(f"📄 Scraped: {page.final_url} ({page.framework}, {page.to_dict()['word_count']} words) for {tenant_id}")
         
     def get_vector_store(self, user_id: str, knowledge_base_id: str) -> MemcacheS3VectorStore:
         if user_id not in self.vector_stores:
             self.vector_stores[user_id] = {}
         
         if knowledge_base_id not in self.vector_stores[user_id]:
-            # Create vector store with user and KB IDs (no local directory needed)
             self.vector_stores[user_id][knowledge_base_id] = MemcacheS3VectorStore(
                 user_id=user_id,
                 knowledge_base_id=knowledge_base_id
@@ -113,14 +128,30 @@ class SaaSVectorManager:
                 self.vector_stores[user_id][knowledge_base_id].clear_data()
                 # Remove from memory
                 del self.vector_stores[user_id][knowledge_base_id]
+    
+    async def scrape_websites(self, jobs: List[Dict]) -> Dict[str, List[Dict]]:
+        """
+        Enhanced multi-tenant website scraping
+        jobs: [{"tenant_id": "user_id:kb_id", "urls": [...]}]
+        returns: {tenant_id: [page_dict, ...]}
+        """
+        return await self.scraper.scrape_multi_tenant(jobs)
 
-# Add environment validation at startup
-
+# Initialize vector manager
 vector_manager = SaaSVectorManager()
 
 # Google OAuth setup
 google_oauth = GoogleOAuth()
 oauth_endpoints = get_google_oauth_endpoints()
+
+# Health check
+@app.get("/")
+async def root():
+    return {"message": "Salesdok Assistant API is running", "version": "4.1.0", "scraper": "enhanced", "vector_db": "weaviate"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "scraper_features": ["multi-tenant", "spa-support", "resource-blocking", "robots-txt"]}
 
 # Auth endpoints
 @app.post("/auth/register", response_model=Token)
@@ -163,7 +194,7 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 🚀 NEW: Google OAuth endpoints
+# Google OAuth endpoints (unchanged)
 @app.get("/auth/google")
 async def google_auth():
     """Initiate Google OAuth flow"""
@@ -211,7 +242,6 @@ async def google_callback(
         existing_user = db.query(User).filter(User.email == email).first()
         
         if existing_user:
-            # User exists, log them in
             user = existing_user
             logger.info(f"Existing user logged in via Google: {email}")
         else:
@@ -219,7 +249,7 @@ async def google_callback(
             user = User(
                 email=email,
                 full_name=name,
-                hashed_password="oauth_user",  # Placeholder for OAuth users
+                hashed_password="oauth_user",
             )
             
             db.add(user)
@@ -228,7 +258,7 @@ async def google_callback(
             
             logger.info(f"New user created via Google OAuth: {email}")
         
-        # Create JWT token for our app
+        # Create JWT token
         jwt_token = create_access_token(data={"sub": str(user.id)})
         
         # Redirect to frontend with token
@@ -243,7 +273,6 @@ async def google_callback(
         logger.error(f"Google OAuth callback error: {e}")
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         return RedirectResponse(url=f"{frontend_url}?error=oauth_failed")
-
 
 @app.get("/auth/me")
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
@@ -302,14 +331,13 @@ async def list_knowledge_bases(
         for kb in knowledge_bases
     ]
 
-# Update the delete knowledge base endpoint
 @app.delete("/knowledge-bases/{knowledge_base_id}")
 async def delete_knowledge_base(
     knowledge_base_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Clear the database first
+    # Verify ownership
     knowledge_base = db.query(KnowledgeBase).filter(
         KnowledgeBase.id == knowledge_base_id,
         KnowledgeBase.user_id == current_user.id
@@ -318,15 +346,8 @@ async def delete_knowledge_base(
     if not knowledge_base:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     
-    # Clear vector store (Memcache + S3 data)
+    # Clear vector store in Weaviate
     vector_manager.clear_vector_store(str(current_user.id), knowledge_base_id)
-    
-    # Remove old local storage directory if it exists (cleanup)
-    old_storage_dir = Path(f"data/{current_user.id}/{knowledge_base_id}")
-    if old_storage_dir.exists():
-        import shutil
-        shutil.rmtree(old_storage_dir)
-        logger.info(f"Cleaned up old local storage: {old_storage_dir}")
     
     db.delete(knowledge_base)
     db.commit()
@@ -335,7 +356,7 @@ async def delete_knowledge_base(
     
     return MessageResponse(message="Knowledge base deleted successfully")
 
-# Content processing endpoints
+# Enhanced content processing endpoints
 @app.post("/knowledge-bases/{knowledge_base_id}/process-website")
 async def process_website(
     knowledge_base_id: str,
@@ -358,35 +379,54 @@ async def process_website(
     knowledge_base.website_url = str(config.url)
     db.commit()
     
-    # Add background task
+    # Add background task with enhanced scraper
     background_tasks.add_task(
-        process_website_background,
+        process_website_background_enhanced,
         str(current_user.id),
         knowledge_base_id,
         config
     )
     
-    logger.info(f"Website processing started for KB {knowledge_base_id}: {config.url}")
+    logger.info(f"🚀 Enhanced website processing started for KB {knowledge_base_id}: {config.url}")
     
     return ProcessingResponse(
-        message="Website processing started",
+        message="Enhanced website processing started with SPA support",
         knowledge_base_id=knowledge_base_id,
         status="processing"
     )
 
-async def process_website_background(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
-    """Background task to process website content"""
+async def process_website_background_enhanced(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
+    """Enhanced background task to process website content with multi-tenant scraper"""
     from models import SessionLocal
     db = SessionLocal()
     try:
         # Get vector store for this user and knowledge base
         vector_store = vector_manager.get_vector_store(user_id, knowledge_base_id)
         
-        # Scrape website
-        scraper = WebScraper()
-        pages = await scraper.scrape_website(str(config.url), config.dict())
+        # Prepare URLs for scraping (support multiple URLs if provided)
+        urls = []
+        main_url = str(config.url)
+        urls.append(main_url)
+        
+        # If additional URLs are provided in config, add them
+        if hasattr(config, 'additional_urls') and config.additional_urls:
+            urls.extend([str(url) for url in config.additional_urls])
+        
+        # Create multi-tenant job for enhanced scraper
+        tenant_id = f"{user_id}:{knowledge_base_id}"
+        scraping_jobs = [{
+            "tenant_id": tenant_id,
+            "urls": urls
+        }]
+        
+        logger.info(f"🔍 Starting enhanced scraping for {len(urls)} URLs...")
+        
+        # Scrape using enhanced multi-tenant scraper
+        results = await vector_manager.scrape_websites(scraping_jobs)
+        pages = results.get(tenant_id, [])
         
         if not pages:
+            logger.warning(f"⚠️ No pages scraped for KB {knowledge_base_id}")
             # Update status to error
             kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
             if kb:
@@ -394,21 +434,71 @@ async def process_website_background(user_id: str, knowledge_base_id: str, confi
                 db.commit()
             return
         
-        # Process pages through vector store
-        await vector_store.process_pages(pages)
+        logger.info(f"✅ Successfully scraped {len(pages)} pages")
+        
+        # Convert enhanced scraper format to vector store format
+        processed_pages = []
+        for page_dict in pages:
+            # Enhanced page format - convert to expected format for process_pages
+            processed_page = {
+                "url": page_dict["final_url"],
+                "title": page_dict.get("title", ""),
+                "content": page_dict.get("text", ""),  # This is the key field for process_pages
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
+                # Add enhanced metadata for logging but keep compatible format
+                "framework": page_dict.get("framework", "unknown"),
+                "word_count": page_dict.get("word_count", 0),
+                "content_hash": page_dict.get("hash", ""),
+                "status": page_dict.get("status", 200),
+                **page_dict.get("meta", {})
+            }
+            
+            # Only add pages with meaningful content
+            if processed_page["content"] and len(processed_page["content"].strip()) > 50:
+                processed_pages.append(processed_page)
+                logger.info(f"📄 Processed: {page_dict['final_url']} ({page_dict.get('framework', 'unknown')}, {page_dict.get('word_count', 0)} words)")
+                logger.debug(f"   Content preview: {processed_page['content'][:200]}...")
+            else:
+                logger.warning(f"⚠️ Skipping page with insufficient content: {page_dict['final_url']} (content length: {len(processed_page['content'].strip()) if processed_page['content'] else 0})")
+        
+        if not processed_pages:
+            logger.error("❌ No valid pages with content to process")
+            # Update status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
+        
+        # Process pages through vector store using the original method
+        logger.info(f"🔄 Processing {len(processed_pages)} pages through vector store...")
+        await vector_store.process_pages(processed_pages)
+        total_chunks = vector_store.get_total_chunks()
+        
+        logger.info(f"✅ Vector store processing complete: {total_chunks} chunks created")
+        
+        # Verify vector store is ready
+        if not vector_store.is_ready():
+            logger.error("❌ Vector store is not ready after processing!")
+            # Update status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
         
         # Update knowledge base status
         kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
         if kb:
             kb.status = "ready"
-            kb.total_chunks = vector_store.get_total_chunks()
+            kb.total_chunks = total_chunks
             kb.last_updated = datetime.now(timezone.utc)
             db.commit()
         
-        logger.info(f"Website processing completed for KB {knowledge_base_id}")
+        logger.info(f"🎯 Enhanced website processing completed for KB {knowledge_base_id}: {len(processed_pages)} pages, {total_chunks} chunks")
         
     except Exception as e:
-        logger.error(f"Error processing website for KB {knowledge_base_id}: {e}")
+        logger.error(f"❌ Error in enhanced website processing for KB {knowledge_base_id}: {e}")
         # Update status to error
         kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
         if kb:
@@ -417,7 +507,12 @@ async def process_website_background(user_id: str, knowledge_base_id: str, confi
     finally:
         db.close()
 
-# Chat endpoints
+# Backward compatibility: Keep old function name as alias
+async def process_website_background(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
+    """Backward compatibility wrapper"""
+    await process_website_background_enhanced(user_id, knowledge_base_id, config)
+
+# Chat endpoints (unchanged)
 @app.post("/chat/query", response_model=QueryResponse)
 async def query_knowledge_base(
     query: QueryRequest,
@@ -474,10 +569,11 @@ async def get_knowledge_base_status(
     return {
         "status": knowledge_base.status,
         "total_chunks": knowledge_base.total_chunks,
-        "last_updated": knowledge_base.last_updated
+        "last_updated": knowledge_base.last_updated,
+        "scraper_version": "enhanced_v4.1"
     }
 
-#Widget helper function
+# Widget helper function
 def widget_to_response(widget: ChatWidget) -> dict:
     """Convert a ChatWidget database object to response format"""
     return {
@@ -500,7 +596,7 @@ def widget_to_response(widget: ChatWidget) -> dict:
         "created_at": widget.created_at.isoformat() if widget.created_at else None,
     }
 
-# Widget management endpoints
+# Widget management endpoints (unchanged)
 @app.post("/widgets", response_model=ChatWidgetResponse)
 async def create_widget(
     widget_data: ChatWidgetCreate,
@@ -550,7 +646,6 @@ async def list_widgets(
     
     return [ChatWidgetResponse(**widget_to_response(widget)) for widget in widgets]
 
-
 @app.get("/widgets/{widget_id}", response_model=ChatWidgetResponse)
 async def get_widget(
     widget_id: str,
@@ -595,7 +690,6 @@ async def update_widget(
     
     return ChatWidgetResponse(**widget_to_response(widget))
 
-
 @app.delete("/widgets/{widget_id}")
 async def delete_widget(
     widget_id: str,
@@ -618,7 +712,7 @@ async def delete_widget(
     
     return MessageResponse(message="Widget deleted successfully")
 
-# Public widget endpoints (no authentication required)
+# Public widget endpoints (unchanged)
 @app.get("/widget/{widget_key}/config", response_model=WidgetConfigResponse)
 async def get_widget_config(widget_key: str, db: Session = Depends(get_db)):
     widget = db.query(ChatWidget).filter(
@@ -646,7 +740,6 @@ async def widget_chat(
     chat_request: WidgetChatRequest,
     db: Session = Depends(get_db)
 ):
-    
     start_time = time_module.time()
     
     # Get widget
@@ -678,7 +771,7 @@ async def widget_chat(
             bot_response=result["answer"],
             confidence_score=result.get("confidence", 0.0),
             response_time_ms=int((time_module.time() - start_time) * 1000),
-            user_ip=None,  # Simplified for demo
+            user_ip=None,
             user_agent='',
             referrer_url=''
         )
@@ -702,7 +795,7 @@ async def widget_chat(
         logger.error(f"Error in widget chat: {e}")
         raise HTTPException(status_code=500, detail="Error processing message")
 
-# Widget JavaScript endpoint
+# Widget JavaScript endpoint (unchanged)
 @app.get("/widget/{widget_key}/script.js")
 async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
     widget = db.query(ChatWidget).filter(
@@ -715,7 +808,7 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
     
     # Generate the JavaScript widget code
     script = f"""
-// AI Chatbot Widget - Generated for {widget.name}
+// AI Chatbot Widget - Generated for {widget.name} (Enhanced Scraper v4.1)
 (function() {{
     var WIDGET_CONFIG = {{
         widgetKey: '{widget.widget_key}',
@@ -725,7 +818,8 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
         welcomeMessage: '{widget.welcome_message}',
         placeholderText: '{widget.placeholder_text}',
         title: '{widget.widget_title}',
-        showBranding: {str(widget.show_branding).lower()}
+        showBranding: {str(widget.show_branding).lower()},
+        version: '4.1-enhanced'
     }};
     
     // Load widget CSS and JS
@@ -747,8 +841,7 @@ async def get_widget_script(widget_key: str, db: Session = Depends(get_db)):
     
     return Response(content=script, media_type="application/javascript")
 
-# Add these endpoints to your main.py
-
+# Document upload endpoints (unchanged for brevity - same as original)
 @app.post("/knowledge-bases/{knowledge_base_id}/upload-documents", response_model=DocumentUploadResponse)
 async def upload_documents(
     knowledge_base_id: str,
@@ -797,7 +890,6 @@ async def upload_documents(
             status_code=400, 
             detail="No valid files found. Please upload TXT or DOCX files (max 10MB each)"
         )
-
     
     # Update status to processing
     knowledge_base.status = "processing"
@@ -821,7 +913,7 @@ async def upload_documents(
         total_chunks_added=0
     )
 
-async def process_documents_background(user_id: str, knowledge_base_id: str, file_data: List[Dict]):  # Changed from List[UploadFile] to List[Dict]
+async def process_documents_background(user_id: str, knowledge_base_id: str, file_data: List[Dict]):
     """Background task to process uploaded documents"""
     from models import SessionLocal
     db = SessionLocal()
@@ -835,26 +927,26 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
         processed_files = 0
         total_chunks_added = 0
         
-        for file_info in file_data:  # Changed from 'file' to 'file_info'
+        for file_info in file_data:
             try:
                 # Create temp file in proper directory
-                temp_file_path = os.path.join(temp_dir, f"upload_{os.getpid()}_{file_info['filename']}")  # Use file_info['filename']
+                temp_file_path = os.path.join(temp_dir, f"upload_{os.getpid()}_{file_info['filename']}")
                 
-                # Write file content (already read in main function)
+                # Write file content
                 with open(temp_file_path, 'wb') as temp_file:
-                    temp_file.write(file_info['content'])  # Use file_info['content']
+                    temp_file.write(file_info['content'])
                 
                 # Extract text based on file type
-                text_content = extract_text_from_file(temp_file_path, file_info['filename'])  # Use file_info['filename']
+                text_content = extract_text_from_file(temp_file_path, file_info['filename'])
                 
                 if text_content.strip():
                     # Create document data for processing
                     document_data = {
                         "text": text_content,
                         "metadata": {
-                            "source_url": f"uploaded_file://{file_info['filename']}",  # Use file_info['filename']
-                            "title": file_info['filename'],  # Use file_info['filename']
-                            "file_type": file_info['file_ext'],  # Use file_info['file_ext']
+                            "source_url": f"uploaded_file://{file_info['filename']}",
+                            "title": file_info['filename'],
+                            "file_type": file_info['file_ext'],
                             "uploaded_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
@@ -864,14 +956,14 @@ async def process_documents_background(user_id: str, knowledge_base_id: str, fil
                     total_chunks_added += chunks_added
                     processed_files += 1
                     
-                    logger.info(f"Processed document {file_info['filename']}: {chunks_added} chunks added")  # Use file_info['filename']
+                    logger.info(f"Processed document {file_info['filename']}: {chunks_added} chunks added")
                 
                 # Clean up temp file
                 if os.path.exists(temp_file_path):
                     os.unlink(temp_file_path)
                 
             except Exception as e:
-                logger.error(f"Error processing file {file_info['filename']}: {e}")  # Use file_info['filename']
+                logger.error(f"Error processing file {file_info['filename']}: {e}")
                 # Clean up temp file if it exists
                 if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
                     try:
@@ -906,12 +998,10 @@ def extract_text_from_file(file_path: str, filename: str) -> str:
     
     try:
         if file_ext == '.txt':
-            # Handle TXT files
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
                 
         elif file_ext in ['.docx', '.doc']:
-            # Handle Word documents
             try:
                 doc = docx.Document(file_path)
                 text_content = []
@@ -957,12 +1047,13 @@ async def get_processing_status(
     if not knowledge_base:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     
-    return DocumentProcessingStatus(
-        status=knowledge_base.status,
-        files_processed=0,  # You could track this in the database if needed
-        total_chunks_added=knowledge_base.total_chunks,
-        error_message=None if knowledge_base.status != "error" else "Processing failed"
-    )
+    return {
+        "status": knowledge_base.status,
+        "files_processed": 0,  # Could track this in database if needed
+        "total_chunks_added": knowledge_base.total_chunks,
+        "error_message": None if knowledge_base.status != "error" else "Processing failed",
+        "scraper_version": "enhanced_v4.1"
+    }
 
 # Serve static widget files
 @app.get("/static/{file_path:path}")
@@ -978,12 +1069,6 @@ async def serve_static(file_path: str):
         return FileResponse(file_location)
     else:
         raise HTTPException(status_code=404, detail="File not found")
-
-# Health check
-@app.get("/")
-async def root():
-    return {"message": "Salesdok Assistant API is running", "version": "3.0.0"}
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
