@@ -1,8 +1,9 @@
-# models.py - Fixed Database models and setup for PostgreSQL
+# models.py - Consolidated database models for PostgreSQL with subscription support
 import os
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, ForeignKey, Float
+import enum
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import create_engine, Column, String, DateTime, Integer, Text, Boolean, ForeignKey, Float, Enum
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from sqlalchemy import text
@@ -48,6 +49,25 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# Subscription Enums
+class SubscriptionPlan(enum.Enum):
+    BASIC = "basic"
+    PRO = "pro" 
+    ENTERPRISE = "enterprise"
+
+class SubscriptionStatus(enum.Enum):
+    ACTIVE = "active"
+    CANCELED = "canceled"
+    PAST_DUE = "past_due"
+    TRIALING = "trialing"
+    EXPIRED = "expired"
+
+class PaymentStatus(enum.Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
 # Database Models - PostgreSQL optimized with fixed datetime handling
 class User(Base):
     __tablename__ = "users"
@@ -70,6 +90,7 @@ class User(Base):
     # Relationships
     knowledge_bases = relationship("KnowledgeBase", back_populates="owner", cascade="all, delete-orphan")
     chat_widgets = relationship("ChatWidget", back_populates="owner", cascade="all, delete-orphan")
+    subscription = relationship("Subscription", back_populates="user", uselist=False)
 
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
@@ -167,6 +188,154 @@ class WidgetConversation(Base):
     # Relationship
     widget = relationship("ChatWidget", back_populates="conversations")
 
+# Subscription Models
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Plan details
+    plan = Column(Enum(SubscriptionPlan), nullable=False, default=SubscriptionPlan.BASIC)
+    status = Column(Enum(SubscriptionStatus), nullable=False, default=SubscriptionStatus.TRIALING)
+    
+    # Razorpay details
+    razorpay_subscription_id = Column(String(255), unique=True, index=True)
+    razorpay_plan_id = Column(String(255))
+    razorpay_customer_id = Column(String(255))
+    
+    # Pricing
+    amount = Column(Integer, nullable=False)  # Amount in smallest currency unit (e.g., paise for INR)
+    currency = Column(String(10), nullable=False, default="INR")
+    billing_cycle = Column(String(20), nullable=False, default="monthly")  # monthly, yearly
+    
+    # Plan limits
+    max_knowledge_bases = Column(Integer, nullable=False)
+    max_total_chunks = Column(Integer, nullable=False)  # Total chunks across all KBs
+    
+    # Trial and billing dates
+    trial_start = Column(DateTime(timezone=True))
+    trial_end = Column(DateTime(timezone=True))
+    current_period_start = Column(DateTime(timezone=True))
+    current_period_end = Column(DateTime(timezone=True))
+    
+    # Usage tracking
+    current_chunk_usage = Column(Integer, default=0, nullable=False)
+    current_kb_count = Column(Integer, default=0, nullable=False)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
+    canceled_at = Column(DateTime(timezone=True))
+    
+    def __init__(self, **kwargs):
+        if 'id' not in kwargs:
+            kwargs['id'] = str(uuid.uuid4())
+        super().__init__(**kwargs)
+    
+    # Relationships
+    user = relationship("User", back_populates="subscription")
+    payments = relationship("Payment", back_populates="subscription", cascade="all, delete-orphan")
+    
+    @classmethod
+    def get_plan_details(cls, plan: SubscriptionPlan):
+        """Get plan pricing and limits"""
+        plan_configs = {
+            SubscriptionPlan.BASIC: {
+                "name": "Basic",
+                "amount_usd": 500,  # $5.00 in cents
+                "amount_inr": 42000,  # ₹420 in paise (approx $5)
+                "max_knowledge_bases": 5,
+                "max_total_chunks": 200,
+                "description": "Perfect for small businesses"
+            },
+            SubscriptionPlan.PRO: {
+                "name": "Pro", 
+                "amount_usd": 2500,  # $25.00 in cents
+                "amount_inr": 210000,  # ₹2100 in paise (approx $25)
+                "max_knowledge_bases": 30,
+                "max_total_chunks": 1500,
+                "description": "For growing businesses"
+            },
+            SubscriptionPlan.ENTERPRISE: {
+                "name": "Enterprise",
+                "amount_usd": 20000,  # $200.00 in cents
+                "amount_inr": 1680000,  # ₹16800 in paise (approx $200)
+                "max_knowledge_bases": -1,  # Unlimited
+                "max_total_chunks": -1,  # Unlimited
+                "description": "For large organizations"
+            }
+        }
+        return plan_configs.get(plan)
+    
+    def can_create_knowledge_base(self):
+        """Check if user can create a new knowledge base"""
+        if self.max_knowledge_bases == -1:  # Unlimited
+            return True
+        return self.current_kb_count < self.max_knowledge_bases
+    
+    def can_add_chunks(self, chunk_count: int):
+        """Check if user can add more chunks"""
+        if self.max_total_chunks == -1:  # Unlimited
+            return True
+        return (self.current_chunk_usage + chunk_count) <= self.max_total_chunks
+    
+    def get_remaining_chunks(self):
+        """Get remaining chunk allowance"""
+        if self.max_total_chunks == -1:
+            return -1  # Unlimited
+        return max(0, self.max_total_chunks - self.current_chunk_usage)
+    
+    def is_trial_active(self):
+        """Check if trial is still active"""
+        if not self.trial_end:
+            return False
+        return datetime.now(timezone.utc) < self.trial_end
+    
+    def is_subscription_active(self):
+        """Check if subscription is active (including trial)"""
+        return self.status in [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING]
+
+class Payment(Base):
+    __tablename__ = "payments"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    subscription_id = Column(String, ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Razorpay payment details
+    razorpay_payment_id = Column(String(255), unique=True, index=True)
+    razorpay_order_id = Column(String(255))
+    razorpay_signature = Column(Text)
+    
+    # Payment details
+    amount = Column(Integer, nullable=False)  # Amount in smallest currency unit
+    currency = Column(String(10), nullable=False, default="INR")
+    status = Column(Enum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
+    
+    # Metadata
+    payment_method = Column(String(50))  # card, upi, netbanking, etc.
+    failure_reason = Column(Text)
+    receipt_url = Column(String(500))
+    
+    # Billing period this payment covers
+    billing_period_start = Column(DateTime(timezone=True))
+    billing_period_end = Column(DateTime(timezone=True))
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False)
+    paid_at = Column(DateTime(timezone=True))
+    
+    def __init__(self, **kwargs):
+        if 'id' not in kwargs:
+            kwargs['id'] = str(uuid.uuid4())
+        super().__init__(**kwargs)
+    
+    # Relationships
+    subscription = relationship("Subscription", back_populates="payments")
+    user = relationship("User")
+
 # Database dependency
 def get_db():
     db = SessionLocal()
@@ -202,7 +371,7 @@ def create_tables():
 # Initialize database
 def init_database():
     """Initialize database with tables"""
-    logger.info("🔄 Initializing database...")
+    logger.info("📄 Initializing database...")
     
     # Test connection first
     if not test_database_connection():

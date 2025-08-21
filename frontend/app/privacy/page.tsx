@@ -476,7 +476,7 @@ export default function PrivacyPolicy() {
                 <div>
                   <span className="text-brand-black font-medium">Mailing Address:</span>
                   <div className="text-brand-midnight/80 text-sm mt-1">
-                    Appwharf, Inc.<br />
+                    Globus Multichem India Pvt Ltd<br />
                     C-09 Sector Ecotech 16<br />
                     Greater Noida, Uttar Pradesh 201308<br />
                     India

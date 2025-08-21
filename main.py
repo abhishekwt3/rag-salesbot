@@ -20,7 +20,7 @@ import uvicorn
 import uuid
 
 # Import database models and utilities
-from models import User, KnowledgeBase, ChatWidget, WidgetConversation, get_db, init_database
+#from models import User, KnowledgeBase, ChatWidget, WidgetConversation, get_db, init_database
 from auth import get_current_user, hash_password, create_access_token, authenticate_user
 from schemas import (
     UserCreate, UserLogin, Token, 
@@ -31,6 +31,17 @@ from schemas import (
     WidgetChatRequest, WidgetChatResponse, WidgetConfigResponse, DocumentUploadResponse
 )
 from sqlalchemy.orm import Session
+from models import (
+    User, KnowledgeBase, ChatWidget, WidgetConversation, get_db, init_database,
+    Subscription, Payment, SubscriptionPlan, SubscriptionStatus, PaymentStatus
+)
+from subscription_schemas import *
+from subscription_middleware import (
+    subscription_manager, get_user_subscription, check_subscription_active,
+    check_can_create_kb, validate_chunk_addition,
+    validate_kb_creation, KBUsageTracker
+)
+from razorpay_utils import razorpay_manager
 
 # Import the enhanced vector store and scraper
 from saas_embeddings import MemcacheS3VectorStore
@@ -283,31 +294,352 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         "created_at": current_user.created_at
     }
 
-# Knowledge base endpoints
-@app.post("/knowledge-bases")
-async def create_knowledge_base(
-    kb_data: KnowledgeBaseCreate,
+@app.get("/subscription/plans", response_model=PlansListResponse)
+async def get_available_plans():
+    """Get all available subscription plans"""
+    plans = []
+    
+    for plan_type in SubscriptionPlan:
+        plan_details = Subscription.get_plan_details(plan_type)
+        
+        # Define features for each plan
+        features_map = {
+            SubscriptionPlan.BASIC: [
+                "5 knowledge bases",
+                "200 data chunks total",
+                "Email support",
+                "Standard branding",
+                "Basic analytics"
+            ],
+            SubscriptionPlan.PRO: [
+                "30 knowledge bases", 
+                "1,500 data chunks total",
+                "Priority support",
+                "Custom branding",
+                "Advanced analytics",
+                "API access",
+                "Integrations"
+            ],
+            SubscriptionPlan.ENTERPRISE: [
+                "Unlimited knowledge bases",
+                "Unlimited data chunks", 
+                "24/7 dedicated support",
+                "White-label solution",
+                "Enterprise analytics",
+                "SSO & SAML",
+                "Custom integrations",
+                "SLA guarantee"
+            ]
+        }
+        
+        plan_info = PlanInfoResponse(
+            plan=plan_type.value,
+            name=plan_details["name"],
+            amount_usd=plan_details["amount_usd"],
+            amount_inr=plan_details["amount_inr"],
+            max_knowledge_bases=plan_details["max_knowledge_bases"],
+            max_total_chunks=plan_details["max_total_chunks"],
+            description=plan_details["description"],
+            features=features_map[plan_type]
+        )
+        plans.append(plan_info)
+    
+    return PlansListResponse(plans=plans)
+
+@app.get("/subscription/current", response_model=SubscriptionResponse)
+async def get_current_subscription(
+    subscription: Subscription = Depends(get_user_subscription)
+):
+    """Get user's current subscription details"""
+    remaining_chunks = subscription.get_remaining_chunks()
+    
+    return SubscriptionResponse(
+        id=subscription.id,
+        plan=subscription.plan.value,
+        status=subscription.status.value,
+        amount=subscription.amount,
+        currency=subscription.currency,
+        billing_cycle=subscription.billing_cycle,
+        max_knowledge_bases=subscription.max_knowledge_bases,
+        max_total_chunks=subscription.max_total_chunks,
+        current_chunk_usage=subscription.current_chunk_usage,
+        current_kb_count=subscription.current_kb_count,
+        remaining_chunks=remaining_chunks,
+        trial_end=subscription.trial_end,
+        current_period_start=subscription.current_period_start,
+        current_period_end=subscription.current_period_end,
+        created_at=subscription.created_at,
+        is_trial_active=subscription.is_trial_active()
+    )
+
+@app.get("/subscription/usage", response_model=UsageResponse)
+async def get_usage_details(
+    subscription: Subscription = Depends(get_user_subscription)
+):
+    """Get detailed usage information"""
+    remaining_chunks = subscription.get_remaining_chunks()
+    
+    return UsageResponse(
+        current_chunk_usage=subscription.current_chunk_usage,
+        max_total_chunks=subscription.max_total_chunks,
+        remaining_chunks=remaining_chunks,
+        current_kb_count=subscription.current_kb_count,
+        max_knowledge_bases=subscription.max_knowledge_bases,
+        can_create_kb=subscription.can_create_knowledge_base(),
+        plan=subscription.plan.value,
+        status=subscription.status.value
+    )
+
+@app.post("/subscription/create", response_model=SubscriptionCreateResponse)
+async def create_subscription(
+    subscription_data: SubscriptionCreateRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    knowledge_base = KnowledgeBase(
-        user_id=current_user.id,
-        name=kb_data.name,
-        description=kb_data.description
+    """Create a new subscription"""
+    if not razorpay_manager.is_available():
+        raise HTTPException(
+            status_code=501,
+            detail="Payment processing is not available. Please contact support."
+        )
+    
+    # Check if user already has an active subscription
+    existing_subscription = db.query(Subscription).filter(
+        Subscription.user_id == current_user.id,
+        Subscription.status.in_([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING])
+    ).first()
+    
+    if existing_subscription:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have an active subscription. Use the upgrade endpoint to change plans."
+        )
+    
+    try:
+        # Create Razorpay customer
+        customer = razorpay_manager.create_customer(
+            email=current_user.email,
+            name=current_user.full_name
+        )
+        
+        if not customer:
+            raise HTTPException(status_code=500, detail="Failed to create customer")
+        
+        # Create Razorpay plan
+        plan = razorpay_manager.create_plan(
+            subscription_data.plan,
+            subscription_data.currency
+        )
+        
+        if not plan:
+            raise HTTPException(status_code=500, detail="Failed to create plan")
+        
+        # Get plan details
+        plan_details = Subscription.get_plan_details(subscription_data.plan)
+        amount_key = f"amount_{subscription_data.currency.lower()}"
+        amount = plan_details[amount_key]
+        
+        # Create payment link for immediate payment
+        payment_link = razorpay_manager.create_payment_link(
+            amount=amount,
+            currency=subscription_data.currency,
+            customer_email=current_user.email,
+            description=f"{plan_details['name']} - Monthly Subscription"
+        )
+        
+        # Create subscription in database
+        subscription = Subscription(
+            user_id=current_user.id,
+            plan=subscription_data.plan,
+            status=SubscriptionStatus.PENDING,
+            razorpay_customer_id=customer['id'],
+            razorpay_plan_id=plan['id'],
+            amount=amount,
+            currency=subscription_data.currency,
+            billing_cycle=subscription_data.billing_cycle,
+            max_knowledge_bases=plan_details["max_knowledge_bases"],
+            max_total_chunks=plan_details["max_total_chunks"],
+            current_chunk_usage=0,
+            current_kb_count=0
+        )
+        
+        db.add(subscription)
+        db.commit()
+        db.refresh(subscription)
+        
+        logger.info(f"✅ Created subscription for user {current_user.email}: {subscription_data.plan.value}")
+        
+        return SubscriptionCreateResponse(
+            subscription_id=subscription.id,
+            razorpay_subscription_id=subscription.razorpay_subscription_id,
+            payment_link=payment_link.get('short_url') if payment_link else None,
+            trial_end=subscription.trial_end,
+            status=subscription.status.value,
+            message="Subscription created successfully. Please complete payment to activate."
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating subscription: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create subscription")
+
+@app.post("/subscription/payment/verify", response_model=PaymentResponse)
+async def verify_payment(
+    payment_data: PaymentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Verify payment and activate subscription"""
+    
+    # Get subscription
+    subscription = db.query(Subscription).filter(
+        Subscription.id == payment_data.subscription_id,
+        Subscription.user_id == current_user.id
+    ).first()
+    
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    # Verify payment signature
+    is_valid = razorpay_manager.verify_payment_signature(
+        payment_data.razorpay_payment_id,
+        payment_data.razorpay_order_id,
+        payment_data.razorpay_signature
     )
-    db.add(knowledge_base)
-    db.commit()
-    db.refresh(knowledge_base)
     
-    logger.info(f"Knowledge base created: {kb_data.name} for user {current_user.email}")
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="Invalid payment signature")
     
-    return {
-        "id": str(knowledge_base.id),
-        "name": knowledge_base.name,
-        "description": knowledge_base.description,
-        "status": knowledge_base.status,
-        "created_at": knowledge_base.created_at
-    }
+    try:
+        # Get payment details from Razorpay
+        payment_details = razorpay_manager.get_payment_details(payment_data.razorpay_payment_id)
+        
+        if not payment_details or payment_details.get('status') != 'captured':
+            raise HTTPException(status_code=400, detail="Payment not successful")
+        
+        # Create payment record
+        payment = Payment(
+            subscription_id=subscription.id,
+            user_id=current_user.id,
+            razorpay_payment_id=payment_data.razorpay_payment_id,
+            razorpay_order_id=payment_data.razorpay_order_id,
+            razorpay_signature=payment_data.razorpay_signature,
+            amount=payment_details['amount'],
+            currency=payment_details['currency'],
+            status=PaymentStatus.COMPLETED,
+            payment_method=payment_details.get('method'),
+            paid_at=datetime.now(timezone.utc),
+            billing_period_start=datetime.now(timezone.utc),
+            billing_period_end=datetime.now(timezone.utc).replace(month=datetime.now(timezone.utc).month + 1)
+        )
+        
+        db.add(payment)
+        
+        # Activate subscription
+        subscription.status = SubscriptionStatus.ACTIVE
+        subscription.current_period_start = datetime.now(timezone.utc)
+        subscription.current_period_end = datetime.now(timezone.utc).replace(month=datetime.now(timezone.utc).month + 1)
+        
+        db.commit()
+        
+        logger.info(f"✅ Payment verified and subscription activated for user {current_user.email}")
+        
+        return PaymentResponse(
+            status="success",
+            message="Payment verified and subscription activated",
+            payment_id=payment.id,
+            subscription_status=subscription.status.value
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error verifying payment: {e}")
+        raise HTTPException(status_code=500, detail="Failed to verify payment")
+
+@app.post("/webhooks/razorpay")
+async def razorpay_webhook(
+    webhook_data: WebhookRequest,
+    db: Session = Depends(get_db)
+):
+    """Handle Razorpay webhooks"""
+    
+    logger.info(f"📡 Received Razorpay webhook: {webhook_data.event}")
+    
+    try:
+        result = razorpay_manager.handle_webhook(webhook_data.dict())
+        
+        # Handle specific webhook events
+        if result["event"] == "payment.captured":
+            # Update payment status
+            payment_id = result.get("payment_id")
+            if payment_id:
+                payment = db.query(Payment).filter(
+                    Payment.razorpay_payment_id == payment_id
+                ).first()
+                
+                if payment:
+                    payment.status = PaymentStatus.COMPLETED
+                    payment.paid_at = datetime.now(timezone.utc)
+                    
+                    # Activate subscription
+                    subscription = payment.subscription
+                    subscription.status = SubscriptionStatus.ACTIVE
+                    
+                    db.commit()
+        
+        elif result["event"] == "subscription.cancelled":
+            # Cancel subscription
+            subscription_id = result.get("subscription_id")
+            if subscription_id:
+                subscription = db.query(Subscription).filter(
+                    Subscription.razorpay_subscription_id == subscription_id
+                ).first()
+                
+                if subscription:
+                    subscription.status = SubscriptionStatus.CANCELED
+                    subscription.canceled_at = datetime.now(timezone.utc)
+                    db.commit()
+        
+        return WebhookResponse(status="processed", message="Webhook processed successfully")
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {e}")
+        return WebhookResponse(status="error", message=str(e))
+
+# Knowledge base endpoints
+@app.post("/knowledge-bases")
+async def create_knowledge_base_with_limits(
+    kb_data: KnowledgeBaseCreate,
+    current_user: User = Depends(get_current_user),
+    subscription: Subscription = Depends(check_can_create_kb),
+    db: Session = Depends(get_db)
+):
+    """Create knowledge base with subscription limits"""
+    
+    with KBUsageTracker(current_user.id, db) as tracker:
+        knowledge_base = KnowledgeBase(
+            user_id=current_user.id,
+            name=kb_data.name,
+            description=kb_data.description
+        )
+        db.add(knowledge_base)
+        db.commit()
+        db.refresh(knowledge_base)
+        
+        tracker.mark_created()
+        
+        logger.info(f"Knowledge base created with limits: {kb_data.name} for user {current_user.email}")
+        
+        return {
+            "id": str(knowledge_base.id),
+            "name": knowledge_base.name,
+            "description": knowledge_base.description,
+            "status": knowledge_base.status,
+            "created_at": knowledge_base.created_at,
+            "subscription_info": {
+                "current_kb_count": subscription.current_kb_count + 1,
+                "max_knowledge_bases": subscription.max_knowledge_bases,
+                "plan": subscription.plan.value
+            }
+        }
 
 @app.get("/knowledge-bases")
 async def list_knowledge_bases(
@@ -356,15 +688,18 @@ async def delete_knowledge_base(
     
     return MessageResponse(message="Knowledge base deleted successfully")
 
-# Enhanced content processing endpoints
+# Update website processing endpoint to check chunk limits
 @app.post("/knowledge-bases/{knowledge_base_id}/process-website")
-async def process_website(
+async def process_website_with_limits(
     knowledge_base_id: str,
     config: WebsiteConfig,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    subscription: Subscription = Depends(check_subscription_active),
     db: Session = Depends(get_db)
 ):
+    """Process website with chunk limit validation"""
+    
     # Verify ownership
     knowledge_base = db.query(KnowledgeBase).filter(
         KnowledgeBase.id == knowledge_base_id,
@@ -374,36 +709,65 @@ async def process_website(
     if not knowledge_base:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     
+    # Estimate chunk usage (rough estimate: 1 page ≈ 5-10 chunks)
+    estimated_chunks = config.max_pages * 8  # Conservative estimate
+    
+    # Check if user can add estimated chunks
+    validation = validate_chunk_addition(current_user.id, estimated_chunks, db)
+    if not validation["can_add"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Estimated {estimated_chunks} chunks would exceed your limit. {validation['message']} Consider upgrading your plan."
+        )
+    
     # Update status to processing
     knowledge_base.status = "processing"
     knowledge_base.website_url = str(config.url)
     db.commit()
     
-    # Add background task with enhanced scraper
+    # Add background task
     background_tasks.add_task(
-        process_website_background_enhanced,
+        process_website_background_with_limits,
         str(current_user.id),
         knowledge_base_id,
         config
     )
     
-    logger.info(f"🚀 Enhanced website processing started for KB {knowledge_base_id}: {config.url}")
+    logger.info(f"🚀 Website processing started with limits for KB {knowledge_base_id}: {config.url}")
     
     return ProcessingResponse(
-        message="Enhanced website processing started with SPA support",
+        message="Website processing started with subscription limits",
         knowledge_base_id=knowledge_base_id,
         status="processing"
     )
 
-async def process_website_background_enhanced(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
-    """Enhanced background task to process website content with multi-tenant scraper"""
+
+async def process_website_background_with_limits(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
+    """Enhanced background task with subscription limit enforcement - FIXED"""
     from models import SessionLocal
     db = SessionLocal()
+    
     try:
+        logger.info(f"🚀 Starting website processing for KB {knowledge_base_id}, URL: {config.url}")
+        
+        # Get user's subscription
+        subscription = db.query(Subscription).filter(
+            Subscription.user_id == user_id
+        ).first()
+        
+        if not subscription:
+            logger.error(f"❌ No subscription found for user {user_id}")
+            # Update KB status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
+        
         # Get vector store for this user and knowledge base
         vector_store = vector_manager.get_vector_store(user_id, knowledge_base_id)
         
-        # Prepare URLs for scraping (support multiple URLs if provided)
+        # Prepare URLs for scraping
         urls = []
         main_url = str(config.url)
         urls.append(main_url)
@@ -419,33 +783,105 @@ async def process_website_background_enhanced(user_id: str, knowledge_base_id: s
             "urls": urls
         }]
         
-        logger.info(f"🔍 Starting enhanced scraping for {len(urls)} URLs...")
+        logger.info(f"📄 Starting enhanced scraping for {len(urls)} URLs...")
+        logger.info(f"📄 URLs to scrape: {urls}")
         
         # Scrape using enhanced multi-tenant scraper
-        results = await vector_manager.scrape_websites(scraping_jobs)
-        pages = results.get(tenant_id, [])
-        
-        if not pages:
-            logger.warning(f"⚠️ No pages scraped for KB {knowledge_base_id}")
-            # Update status to error
+        try:
+            results = await vector_manager.scrape_websites(scraping_jobs)
+            pages = results.get(tenant_id, [])
+            logger.info(f"📄 Scraper returned {len(pages)} pages")
+        except Exception as scrape_error:
+            logger.error(f"❌ Scraping failed: {scrape_error}")
+            # Update KB status to error
             kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
             if kb:
                 kb.status = "error"
                 db.commit()
             return
         
-        logger.info(f"✅ Successfully scraped {len(pages)} pages")
+        if not pages:
+            logger.warning(f"⚠️ No pages scraped for KB {knowledge_base_id}")
+            logger.warning(f"⚠️ Scraping results: {results}")
+            
+            # Try fallback simple scraping approach
+            logger.info(f"🔄 Trying fallback scraping approach...")
+            try:
+                import requests
+                from bs4 import BeautifulSoup
+                
+                # Simple fallback scraping
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                
+                fallback_pages = []
+                for url in urls[:config.max_pages]:  # Respect max_pages limit
+                    try:
+                        response = requests.get(url, headers=headers, timeout=10)
+                        if response.status_code == 200:
+                            soup = BeautifulSoup(response.content, 'html.parser')
+                            
+                            # Extract title
+                            title = ""
+                            if soup.title:
+                                title = soup.title.string.strip() if soup.title.string else ""
+                            
+                            # Extract text content
+                            # Remove script and style elements
+                            for script in soup(["script", "style"]):
+                                script.decompose()
+                            
+                            # Get text
+                            text = soup.get_text()
+                            
+                            # Clean up text
+                            lines = (line.strip() for line in text.splitlines())
+                            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                            text = ' '.join(chunk for chunk in chunks if chunk)
+                            
+                            if len(text.strip()) > 100:  # Only add if meaningful content
+                                page_data = {
+                                    "final_url": url,
+                                    "title": title,
+                                    "text": text,
+                                    "word_count": len(text.split()),
+                                    "status": response.status_code,
+                                    "framework": "fallback",
+                                    "hash": str(hash(text))
+                                }
+                                fallback_pages.append(page_data)
+                                logger.info(f"✅ Fallback scraped: {url} ({len(text)} chars)")
+                    
+                    except Exception as e:
+                        logger.error(f"❌ Fallback scraping failed for {url}: {e}")
+                        continue
+                
+                pages = fallback_pages
+                logger.info(f"📄 Fallback scraping got {len(pages)} pages")
+                
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback scraping failed: {fallback_error}")
+        
+        if not pages:
+            logger.error(f"❌ No pages scraped after all attempts for KB {knowledge_base_id}")
+            # Update KB status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
+        
+        logger.info(f"✅ Successfully got {len(pages)} pages for processing")
         
         # Convert enhanced scraper format to vector store format
         processed_pages = []
         for page_dict in pages:
-            # Enhanced page format - convert to expected format for process_pages
             processed_page = {
-                "url": page_dict["final_url"],
+                "url": page_dict.get("final_url", page_dict.get("url", "")),
                 "title": page_dict.get("title", ""),
-                "content": page_dict.get("text", ""),  # This is the key field for process_pages
+                "content": page_dict.get("text", page_dict.get("content", "")),
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
-                # Add enhanced metadata for logging but keep compatible format
                 "framework": page_dict.get("framework", "unknown"),
                 "word_count": page_dict.get("word_count", 0),
                 "content_hash": page_dict.get("hash", ""),
@@ -454,33 +890,72 @@ async def process_website_background_enhanced(user_id: str, knowledge_base_id: s
             }
             
             # Only add pages with meaningful content
-            if processed_page["content"] and len(processed_page["content"].strip()) > 50:
+            content_length = len(processed_page["content"].strip()) if processed_page["content"] else 0
+            if content_length > 50:
                 processed_pages.append(processed_page)
-                logger.info(f"📄 Processed: {page_dict['final_url']} ({page_dict.get('framework', 'unknown')}, {page_dict.get('word_count', 0)} words)")
-                logger.debug(f"   Content preview: {processed_page['content'][:200]}...")
+                logger.info(f"📄 Processed: {processed_page['url']} ({content_length} chars, {processed_page.get('word_count', 0)} words)")
             else:
-                logger.warning(f"⚠️ Skipping page with insufficient content: {page_dict['final_url']} (content length: {len(processed_page['content'].strip()) if processed_page['content'] else 0})")
+                logger.warning(f"⚠️ Skipping page with insufficient content: {processed_page['url']} (content length: {content_length})")
         
         if not processed_pages:
-            logger.error("❌ No valid pages with content to process")
-            # Update status to error
+            logger.error(f"❌ No valid pages with content to process for KB {knowledge_base_id}")
+            # Update KB status to error
             kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
             if kb:
                 kb.status = "error"
                 db.commit()
             return
         
-        # Process pages through vector store using the original method
-        logger.info(f"🔄 Processing {len(processed_pages)} pages through vector store...")
-        await vector_store.process_pages(processed_pages)
-        total_chunks = vector_store.get_total_chunks()
+        # Process pages through vector store
+        logger.info(f"📄 Processing {len(processed_pages)} pages through vector store...")
+        try:
+            await vector_store.process_pages(processed_pages)
+            total_chunks = vector_store.get_total_chunks()
+            logger.info(f"✅ Vector store processing complete: {total_chunks} chunks created")
+        except Exception as vector_error:
+            logger.error(f"❌ Vector store processing failed: {vector_error}")
+            # Update KB status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
         
-        logger.info(f"✅ Vector store processing complete: {total_chunks} chunks created")
+        # IMPORTANT: Validate final chunk count against subscription limits
+        if total_chunks == 0:
+            logger.error(f"❌ No chunks were created from {len(processed_pages)} pages")
+            # Update KB status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            return
+        
+        if not subscription.can_add_chunks(total_chunks):
+            logger.error(f"❌ Chunk limit exceeded during processing: {total_chunks} chunks, user has {subscription.get_remaining_chunks()} remaining")
+            
+            # Clear the vector store to prevent limit violation
+            try:
+                vector_store.clear_data()
+                logger.info(f"🧹 Cleared vector store due to chunk limit violation")
+            except:
+                pass
+            
+            # Update KB status to error
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+            
+            return
+        
+        # Update chunk usage in subscription
+        subscription_manager.update_chunk_usage(user_id, total_chunks, db)
+        logger.info(f"📊 Updated subscription chunk usage: +{total_chunks} chunks")
         
         # Verify vector store is ready
         if not vector_store.is_ready():
-            logger.error("❌ Vector store is not ready after processing!")
-            # Update status to error
+            logger.error(f"❌ Vector store is not ready after processing!")
             kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
             if kb:
                 kb.status = "error"
@@ -494,18 +969,59 @@ async def process_website_background_enhanced(user_id: str, knowledge_base_id: s
             kb.total_chunks = total_chunks
             kb.last_updated = datetime.now(timezone.utc)
             db.commit()
+            logger.info(f"✅ Updated KB status to ready with {total_chunks} chunks")
         
-        logger.info(f"🎯 Enhanced website processing completed for KB {knowledge_base_id}: {len(processed_pages)} pages, {total_chunks} chunks")
+        logger.info(f"🎯 Website processing completed successfully: {len(processed_pages)} pages, {total_chunks} chunks")
         
     except Exception as e:
-        logger.error(f"❌ Error in enhanced website processing for KB {knowledge_base_id}: {e}")
-        # Update status to error
-        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
-        if kb:
-            kb.status = "error"
-            db.commit()
+        logger.error(f"❌ Critical error in website processing: {str(e)}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        
+        # Update KB status to error
+        try:
+            kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == knowledge_base_id).first()
+            if kb:
+                kb.status = "error"
+                db.commit()
+        except:
+            pass
     finally:
         db.close()
+
+# Usage validation endpoints
+@app.get("/subscription/validate/chunks/{chunk_count}")
+async def validate_chunk_usage(
+    chunk_count: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Validate if user can add specified chunks"""
+    validation = validate_chunk_addition(current_user.id, chunk_count, db)
+    return ChunkUsageValidation(**validation)
+
+@app.get("/subscription/validate/knowledge-base")
+async def validate_kb_creation(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Validate if user can create a knowledge base"""
+    validation = validate_kb_creation(current_user.id, db)
+    return KnowledgeBaseValidation(**validation)
+
+# Admin endpoint to recalculate usage
+@app.post("/admin/recalculate-usage/{user_id}")
+async def admin_recalculate_usage(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Admin endpoint to recalculate user's actual usage"""
+    # Add admin role checking here if needed
+    
+    subscription_manager.recalculate_usage(user_id, db)
+    
+    return MessageResponse(message=f"Usage recalculated for user {user_id}")
 
 # Backward compatibility: Keep old function name as alias
 async def process_website_background(user_id: str, knowledge_base_id: str, config: WebsiteConfig):

@@ -1,5 +1,3 @@
-# Usage example is at the bottom. Run:  python simple_scraper.py
-
 import asyncio
 import logging
 import random
@@ -328,24 +326,34 @@ class EnhancedSimpleScraper:
 
         return results
 
-    # -------- Enhanced Fetch logic with framework detection --------
+    # -------- Enhanced Fetch logic with progressive fallback --------
     async def _fetch_with_retries(self, page: Page, url: str) -> Optional[ScrapedPage]:
         parsed = urlparse(url)
         host = parsed.netloc
 
+        # Progressive timeout and strategy degradation
+        attempt_configs = [
+            {"timeout": 60000, "wait_time": 3, "full_framework": True},   # Full attempt
+            {"timeout": 30000, "wait_time": 2, "full_framework": False},  # Reduced attempt  
+            {"timeout": 15000, "wait_time": 1, "full_framework": False},  # Minimal attempt
+        ]
+
         for attempt in range(1, self.max_retries + 1):
             await self.host_limiter.throttle(host)
+            config = attempt_configs[attempt - 1]
+            
             try:
-                # First try Playwright (dynamic content)
-                logger.info(f"🌐 [{host}] Attempt {attempt}: Enhanced Playwright GET {url}")
-                resp = await page.goto(url, wait_until="networkidle", timeout=60000)
+                logger.info(f"🌐 [{host}] Attempt {attempt}: Enhanced Playwright GET {url} (timeout={config['timeout']}ms)")
+                resp = await page.goto(url, wait_until="networkidle", timeout=config["timeout"])
                 status = resp.status if resp else 0
 
-                # Detect framework type
-                framework = await FrameworkDetector.detect_framework(page, url)
+                # Detect framework type (only on first attempt)
+                framework = 'static'
+                if attempt == 1:
+                    framework = await FrameworkDetector.detect_framework(page, url)
                 
-                # Framework-specific waiting and content extraction
-                await self._wait_for_framework_content(page, framework)
+                # Framework-specific waiting with progressive reduction
+                await self._wait_for_framework_content(page, framework, config)
 
                 # Try to click common consent banners (best-effort, no fail)
                 await self._dismiss_consent(page)
@@ -356,9 +364,9 @@ class EnhancedSimpleScraper:
                 # Framework-aware content extraction
                 text, title, meta_desc, meta = await self._extract_content_enhanced(page, html, final_url, framework)
 
-                # Heuristic: if text is too small, fallback to static client (maybe JS blocked)
-                if (not text or len(text) < 200) and httpx is not None:
-                    logger.info(f"📉 [{host}] Dynamic content thin; trying static fallback for {url}")
+                # Heuristic: if text is too small, fallback to static client (attempt 2+)
+                if (not text or len(text) < 200) and httpx is not None and attempt >= 2:
+                    logger.info(f"📉 [{host}] Dynamic content thin on attempt {attempt}; trying static fallback for {url}")
                     static_page = await self._fetch_static(url)
                     if static_page:
                         return static_page
@@ -370,70 +378,71 @@ class EnhancedSimpleScraper:
                 logger.warning(f"⚠️ [{host}] Attempt {attempt} failed for {url}: {e}")
                 await asyncio.sleep(self._backoff(attempt))
 
-        # As a final fallback, try static client if available
+        # Final fallback to static client
         if httpx is not None:
             logger.info(f"🔄 [{host}] Final fallback: static fetch for {url}")
             return await self._fetch_static(url)
 
         return None
 
-    async def _wait_for_framework_content(self, page: Page, framework: str):
-        """Wait for framework-specific content to load"""
+    async def _wait_for_framework_content(self, page: Page, framework: str, config: Dict):
+        """Wait for framework-specific content with progressive timeouts"""
+        full_framework = config.get("full_framework", True)
+        wait_time = config.get("wait_time", 3)
+        base_timeout = min(config.get("timeout", 60000) // 4, 15000)  # 1/4 of page timeout, max 15s
+        
         try:
-            if framework == 'nextjs':
+            if framework == 'nextjs' and full_framework:
                 logger.info("⚛️ Waiting for Next.js content...")
-                # Wait for Next.js specific elements
                 await page.wait_for_function(
                     "() => window.__NEXT_DATA__ || document.querySelector('#__next')",
-                    timeout=20000
+                    timeout=base_timeout
                 )
-                # Wait for main content container
-                await page.wait_for_selector("#__next", timeout=15000)
+                await page.wait_for_selector("#__next", timeout=base_timeout)
                 
-            elif framework == 'react':
+            elif framework == 'react' and full_framework:
                 logger.info("⚛️ Waiting for React content...")
-                # Wait for React root
                 await page.wait_for_function(
                     "() => document.querySelector('#root') || document.querySelector('[data-reactroot]')",
-                    timeout=20000
+                    timeout=base_timeout
                 )
-                await page.wait_for_selector("#root, [data-reactroot]", timeout=15000)
+                await page.wait_for_selector("#root, [data-reactroot]", timeout=base_timeout)
                 
-            elif framework == 'spa':
+            elif framework == 'spa' and full_framework:
                 logger.info("🔄 Waiting for SPA content...")
-                # Generic SPA waiting
                 await page.wait_for_function(
                     "() => document.querySelector('#root') || document.querySelector('#__next') || document.querySelector('[data-reactroot]')",
-                    timeout=20000
+                    timeout=base_timeout
                 )
                 
-            # Wait for loading indicators to disappear (all frameworks)
-            try:
-                await page.wait_for_function(
-                    """() => {
-                        const loadingElements = document.querySelectorAll(
-                            '[class*="loading"], [class*="spinner"], [class*="loader"], [aria-label*="loading"], [aria-label*="Loading"]'
-                        );
-                        const visibleLoaders = Array.from(loadingElements).filter(el => 
-                            el.offsetWidth > 0 && el.offsetHeight > 0
-                        );
-                        return visibleLoaders.length === 0;
-                    }""",
-                    timeout=15000
-                )
-                logger.info("✅ Loading indicators cleared")
-            except Exception:
-                logger.debug("⚠️ Loading indicator check timed out (proceeding anyway)")
+            # Wait for loading indicators to disappear (reduced timeout on later attempts)
+            if full_framework:
+                try:
+                    await page.wait_for_function(
+                        """() => {
+                            const loadingElements = document.querySelectorAll(
+                                '[class*="loading"], [class*="spinner"], [class*="loader"], [aria-label*="loading"], [aria-label*="Loading"]'
+                            );
+                            const visibleLoaders = Array.from(loadingElements).filter(el => 
+                                el.offsetWidth > 0 && el.offsetHeight > 0
+                            );
+                            return visibleLoaders.length === 0;
+                        }""",
+                        timeout=base_timeout
+                    )
+                    logger.info("✅ Loading indicators cleared")
+                except Exception:
+                    logger.debug("⚠️ Loading indicator check timed out (proceeding anyway)")
                 
             # Basic content wait
             if self.wait_selector:
                 try:
-                    await page.wait_for_selector(self.wait_selector, timeout=15000)
+                    await page.wait_for_selector(self.wait_selector, timeout=base_timeout)
                 except Exception:
                     pass
 
-            # Additional wait for content to stabilize
-            await asyncio.sleep(3)
+            # Progressive wait time reduction
+            await asyncio.sleep(wait_time)
             
         except Exception as e:
             logger.debug(f"⚠️ Framework-specific waiting failed: {e}")

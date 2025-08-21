@@ -1,120 +1,193 @@
-// Add this component to your frontend (create as components/FileUpload.tsx)
-
+// components/FileUpload.tsx - Updated with subscription limits
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { Button } from "@/components/ui/button"
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
-import { 
-  Upload, 
-  FileText, 
-  X, 
-  CheckCircle, 
-  AlertCircle,
-  Loader2
+import { Badge } from "@/components/ui/badge"
+import {
+  Upload,
+  File,
+  X,
+  CheckCircle,
+  AlertTriangle,
+  Loader2,
+  FileText,
+  Crown,
+  Database,
 } from 'lucide-react'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.salesdok.com'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+interface Usage {
+  current_chunk_usage: number
+  max_total_chunks: number
+  remaining_chunks: number
+  current_kb_count: number
+  max_knowledge_bases: number
+  can_create_kb: boolean
+  plan: string
+  status: string
+}
 
 interface FileUploadProps {
   knowledgeBaseId: string
   token: string
   onUploadComplete: () => void
-  isOpen: boolean
-  onOpenChange: (open: boolean) => void
+  usage?: Usage
+  onUpgrade?: () => void
 }
 
-interface UploadFile {
+interface UploadedFile {
   file: File
   id: string
-  status: 'pending' | 'uploading' | 'success' | 'error'
+  status: 'pending' | 'uploading' | 'completed' | 'error'
   progress: number
   error?: string
+  estimatedChunks?: number
 }
 
 export default function FileUpload({ 
   knowledgeBaseId, 
   token, 
-  onUploadComplete, 
-  isOpen, 
-  onOpenChange 
+  onUploadComplete,
+  usage,
+  onUpgrade 
 }: FileUploadProps) {
-  const [files, setFiles] = useState<UploadFile[]>([])
+  const [files, setFiles] = useState<UploadedFile[]>([])
+  const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [dragOver, setDragOver] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState('')
+  interface UploadResult {
+    files_processed?: number
+    // add other properties if needed
+  }
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
 
-  const allowedTypes = ['text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+  const allowedTypes = ['.txt', '.docx', '.doc']
   const maxFileSize = 10 * 1024 * 1024 // 10MB
+  const maxFiles = 5
 
-  const handleFileSelect = (selectedFiles: FileList | null) => {
-    if (!selectedFiles) return
+  // Estimate chunks for a file (rough estimate: 1KB ≈ 0.5 chunks)
+  const estimateChunks = (file: File): number => {
+    const sizeKB = file.size / 1024
+    return Math.ceil(sizeKB * 0.5)
+  }
 
-    const newFiles: UploadFile[] = []
+  // Validate file against subscription limits
+  const validateFile = (file: File): { valid: boolean; error?: string } => {
+    // Check file type
+    const extension = '.' + file.name.split('.').pop()?.toLowerCase()
+    if (!allowedTypes.includes(extension)) {
+      return { valid: false, error: `File type ${extension} not supported. Allowed: ${allowedTypes.join(', ')}` }
+    }
+
+    // Check file size
+    if (file.size > maxFileSize) {
+      return { valid: false, error: `File size exceeds 10MB limit` }
+    }
+
+    // Check chunk limits if usage data is available
+    if (usage && usage.max_total_chunks !== -1) {
+      const estimatedChunks = estimateChunks(file)
+      if (estimatedChunks > usage.remaining_chunks) {
+        return { 
+          valid: false, 
+          error: `File would use ~${estimatedChunks} chunks but you only have ${usage.remaining_chunks} remaining. Upgrade your plan or remove some content.`
+        }
+      }
+    }
+
+    return { valid: true }
+  }
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
     
-    Array.from(selectedFiles).forEach((file) => {
-      // Validate file type
-      const isValidType = allowedTypes.includes(file.type) || 
-                         file.name.toLowerCase().endsWith('.txt') || 
-                         file.name.toLowerCase().endsWith('.docx')
+    const droppedFiles = Array.from(e.dataTransfer.files)
+    addFiles(droppedFiles)
+  }, [])
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || [])
+    addFiles(selectedFiles)
+    e.target.value = '' // Reset input
+  }
+
+  const addFiles = (newFiles: File[]) => {
+    setError('')
+
+    if (files.length + newFiles.length > maxFiles) {
+      setError(`Maximum ${maxFiles} files allowed`)
+      return
+    }
+
+    const validFiles: UploadedFile[] = []
+    let totalEstimatedChunks = 0
+
+    for (const file of newFiles) {
+      const validation = validateFile(file)
       
-      if (!isValidType) {
-        alert(`File "${file.name}" is not supported. Please upload TXT or DOCX files.`)
-        return
+      if (!validation.valid) {
+        setError(validation.error || 'Invalid file')
+        continue
       }
 
-      // Validate file size
-      if (file.size > maxFileSize) {
-        alert(`File "${file.name}" is too large. Maximum size is 10MB.`)
-        return
-      }
+      const estimatedChunks = estimateChunks(file)
+      totalEstimatedChunks += estimatedChunks
 
-      newFiles.push({
+      validFiles.push({
         file,
         id: Math.random().toString(36).substr(2, 9),
         status: 'pending',
-        progress: 0
+        progress: 0,
+        estimatedChunks
       })
-    })
+    }
 
-    setFiles(prev => [...prev, ...newFiles])
+    // Final check for total chunks
+    if (usage && usage.max_total_chunks !== -1) {
+      const currentTotalEstimate = files.reduce((sum, f) => sum + (f.estimatedChunks || 0), 0)
+      if (currentTotalEstimate + totalEstimatedChunks > usage.remaining_chunks) {
+        setError(`Total estimated chunks (${currentTotalEstimate + totalEstimatedChunks}) would exceed your remaining limit (${usage.remaining_chunks})`)
+        return
+      }
+    }
+
+    setFiles(prev => [...prev, ...validFiles])
   }
 
-  const removeFile = (fileId: string) => {
-    setFiles(prev => prev.filter(f => f.id !== fileId))
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    handleFileSelect(e.dataTransfer.files)
-  }
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(true)
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
+  const removeFile = (id: string) => {
+    setFiles(prev => prev.filter(f => f.id !== id))
   }
 
   const uploadFiles = async () => {
     if (files.length === 0) return
 
     setUploading(true)
+    setError('')
+    setUploadResult(null)
 
     try {
       const formData = new FormData()
-      files.forEach(fileObj => {
-        formData.append('files', fileObj.file)
+      files.forEach(({ file }) => {
+        formData.append('files', file)
       })
 
-      // Update all files to uploading status
+      // Update file statuses to uploading
       setFiles(prev => prev.map(f => ({ ...f, status: 'uploading' as const, progress: 0 })))
 
       const response = await fetch(`${API_BASE}/knowledge-bases/${knowledgeBaseId}/upload-documents`, {
@@ -126,156 +199,256 @@ export default function FileUpload({
       })
 
       if (response.ok) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const data = await response.json()
+        const result = await response.json()
+        setUploadResult(result)
         
-        // Mark all files as successful
-        setFiles(prev => prev.map(f => ({ 
-          ...f, 
-          status: 'success' as const, 
-          progress: 100 
-        })))
-
-        // Close dialog after short delay
-        setTimeout(() => {
-          onUploadComplete()
-          onOpenChange(false)
-          setFiles([])
-        }, 1500)
-
+        // Update files to completed
+        setFiles(prev => prev.map(f => ({ ...f, status: 'completed' as const, progress: 100 })))
+        
+        // Poll for processing status
+        pollProcessingStatus()
       } else {
         const errorData = await response.json()
+        setError(errorData.detail || 'Upload failed')
         
-        // Mark all files as error
-        setFiles(prev => prev.map(f => ({ 
-          ...f, 
-          status: 'error' as const, 
-          error: errorData.detail || 'Upload failed' 
-        })))
+        // Update files to error
+        setFiles(prev => prev.map(f => ({ ...f, status: 'error' as const, error: errorData.detail })))
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      console.error('Upload error:', error)
-      
-      // Mark all files as error
-      setFiles(prev => prev.map(f => ({ 
-        ...f, 
-        status: 'error' as const, 
-        error: 'Network error' 
-      })))
+      setError('Network error during upload')
+      setFiles(prev => prev.map(f => ({ ...f, status: 'error' as const, error: 'Network error' })))
     } finally {
       setUploading(false)
     }
   }
 
-  const getFileIcon = (fileName: string) => {
-    const ext = fileName.toLowerCase().split('.').pop()
-    if (ext === 'txt') return '📄'
-    if (ext === 'docx' || ext === 'doc') return '📘'
-    return '📁'
+  const pollProcessingStatus = async () => {
+    const maxAttempts = 30
+    let attempts = 0
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/knowledge-bases/${knowledgeBaseId}/processing-status`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+
+        if (response.ok) {
+          const status = await response.json()
+          
+          if (status.status === 'ready') {
+            onUploadComplete()
+            return
+          } else if (status.status === 'error') {
+            setError('Processing failed. Please try again.')
+            return
+          }
+        }
+
+        attempts++
+        if (attempts < maxAttempts) {
+          setTimeout(checkStatus, 2000) // Check every 2 seconds
+        } else {
+          setError('Processing is taking longer than expected. Please check back later.')
+        }
+      } catch (error) {
+        console.error('Error checking status:', error)
+      }
+    }
+
+    checkStatus()
   }
 
-  const getStatusIcon = (status: UploadFile['status']) => {
-    switch (status) {
-      case 'pending':
-        return <FileText className="h-4 w-4 text-gray-400" />
-      case 'uploading':
-        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
-      case 'success':
-        return <CheckCircle className="h-4 w-4 text-green-500" />
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />
-    }
+  const getFileIcon = (fileName: string) => {
+    const extension = fileName.split('.').pop()?.toLowerCase()
+    if (extension === 'txt') return <FileText className="h-5 w-5 text-blue-500" />
+    if (['doc', 'docx'].includes(extension || '')) return <FileText className="h-5 w-5 text-blue-600" />
+    return <File className="h-5 w-5 text-gray-500" />
   }
+
+  const totalEstimatedChunks = files.reduce((sum, f) => sum + (f.estimatedChunks || 0), 0)
 
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Upload Documents</DialogTitle>
-          <DialogDescription>
-            Upload TXT or DOCX files to add content to your knowledge base. Maximum 10MB per file.
-          </DialogDescription>
-        </DialogHeader>
+    <div className="space-y-6">
+      {/* Usage Info */}
+      {usage && (
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-blue-600" />
+                <span className="text-sm font-medium">Chunk Usage</span>
+              </div>
+              <Badge variant="outline">
+                {usage.plan} Plan
+              </Badge>
+            </div>
+            <div className="mt-2 text-sm text-brand-midnight/70">
+              Current: {usage.current_chunk_usage.toLocaleString()} / {' '}
+              {usage.max_total_chunks === -1 ? 'Unlimited' : usage.max_total_chunks.toLocaleString()}
+              {usage.max_total_chunks !== -1 && (
+                <span className="ml-2">
+                  ({usage.remaining_chunks.toLocaleString()} remaining)
+                </span>
+              )}
+            </div>
+            {totalEstimatedChunks > 0 && (
+              <div className="mt-1 text-xs text-blue-600">
+                Estimated chunks for selected files: ~{totalEstimatedChunks}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-        <div className="space-y-4">
-          {/* Drop Zone */}
+      {/* Chunk limit warning */}
+      {usage && usage.remaining_chunks < 50 && usage.max_total_chunks !== -1 && (
+        <Alert className="border-yellow-200 bg-yellow-50">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <strong>Low on chunks:</strong> Only {usage.remaining_chunks} chunks remaining.
+                {onUpgrade && (
+                  <div className="text-sm mt-1">Upgrade your plan to get more data chunks.</div>
+                )}
+              </div>
+              {onUpgrade && (
+                <Button size="sm" variant="outline" onClick={onUpgrade}>
+                  <Crown className="h-4 w-4 mr-1" />
+                  Upgrade
+                </Button>
+              )}
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Upload Area */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5" />
+            Upload Documents
+          </CardTitle>
+          <p className="text-sm text-brand-midnight/70">
+            Upload TXT or DOCX files (max {maxFileSize / (1024 * 1024)}MB each, {maxFiles} files total)
+          </p>
+        </CardHeader>
+        <CardContent>
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-              dragOver 
-                ? 'border-blue-500 bg-blue-50' 
-                : 'border-gray-300 hover:border-gray-400'
+              isDragging 
+                ? 'border-brand-dark-cyan bg-brand-dark-cyan/5' 
+                : 'border-gray-300 hover:border-brand-dark-cyan/50'
             }`}
-            onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onClick={() => fileInputRef.current?.click()}
+            onDrop={handleDrop}
           >
-            <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            <p className="text-lg font-medium text-gray-700 mb-2">
-              Drop files here or click to select
+            <Upload className={`h-12 w-12 mx-auto mb-4 ${isDragging ? 'text-brand-dark-cyan' : 'text-gray-400'}`} />
+            <p className="text-lg font-medium text-brand-black mb-2">
+              {isDragging ? 'Drop files here' : 'Drag & drop files here'}
             </p>
-            <p className="text-sm text-gray-500">
-              Supported formats: TXT, DOCX (max 10MB each)
+            <p className="text-brand-midnight/60 mb-4">
+              or click to select files
             </p>
-            
             <input
-              ref={fileInputRef}
               type="file"
               multiple
-              accept=".txt,.docx"
-              onChange={(e) => handleFileSelect(e.target.files)}
+              accept={allowedTypes.join(',')}
+              onChange={handleFileSelect}
               className="hidden"
+              id="file-upload"
+              disabled={uploading}
             />
+            <label htmlFor="file-upload">
+              <Button
+                variant="outline"
+                className="cursor-pointer"
+                disabled={uploading}
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Select Files
+              </Button>
+            </label>
           </div>
+        </CardContent>
+      </Card>
 
-          {/* File List */}
-          {files.length > 0 && (
-            <div className="space-y-2">
-              <h4 className="font-medium text-gray-700">Selected Files</h4>
-              
-              {files.map((fileObj) => (
-                <div key={fileObj.id} className="flex items-center gap-3 p-3 border rounded-lg">
-                  <span className="text-xl">{getFileIcon(fileObj.file.name)}</span>
-                  
+      {/* File List */}
+      {files.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Selected Files ({files.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {files.map((fileItem) => (
+                <div key={fileItem.id} className="flex items-center gap-3 p-3 border rounded-lg">
+                  {getFileIcon(fileItem.file.name)}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-700 truncate">
-                      {fileObj.file.name}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {(fileObj.file.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                    
-                    {fileObj.status === 'uploading' && (
-                      <Progress value={fileObj.progress} className="mt-1" />
-                    )}
-                    
-                    {fileObj.status === 'error' && fileObj.error && (
-                      <p className="text-xs text-red-500 mt-1">{fileObj.error}</p>
-                    )}
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(fileObj.status)}
-                    
-                    {fileObj.status === 'pending' && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => removeFile(fileObj.id)}
-                        className="h-6 w-6 p-0"
+                    <p className="font-medium truncate">{fileItem.file.name}</p>
+                    <div className="flex items-center gap-4 text-sm text-brand-midnight/60">
+                      <span>{(fileItem.file.size / 1024).toFixed(1)} KB</span>
+                      {fileItem.estimatedChunks && (
+                        <span>~{fileItem.estimatedChunks} chunks</span>
+                      )}
+                      <Badge
+                        variant={
+                          fileItem.status === 'completed' ? 'default' :
+                          fileItem.status === 'error' ? 'destructive' :
+                          fileItem.status === 'uploading' ? 'secondary' : 'outline'
+                        }
                       >
-                        <X className="h-3 w-3" />
-                      </Button>
+                        {fileItem.status}
+                      </Badge>
+                    </div>
+                    {fileItem.status === 'uploading' && (
+                      <Progress value={fileItem.progress} className="mt-2 h-1" />
+                    )}
+                    {fileItem.status === 'error' && fileItem.error && (
+                      <p className="text-sm text-red-600 mt-1">{fileItem.error}</p>
                     )}
                   </div>
+                  {fileItem.status === 'completed' ? (
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                  ) : fileItem.status === 'error' ? (
+                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                  ) : fileItem.status === 'uploading' ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-red-500 hover:bg-red-50"
+                      onClick={() => removeFile(fileItem.id)}
+                      disabled={uploading}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
-          )}
 
-          {/* Upload Button */}
-          {files.length > 0 && (
-            <div className="flex justify-end gap-2">
+            {/* Upload Summary */}
+            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between text-sm">
+                <span>Total files: {files.length}</span>
+                <span>Estimated chunks: ~{totalEstimatedChunks}</span>
+              </div>
+              {usage && usage.max_total_chunks !== -1 && (
+                <div className="mt-1 text-xs text-brand-midnight/60">
+                  After upload: {usage.current_chunk_usage + totalEstimatedChunks} / {usage.max_total_chunks} chunks
+                </div>
+              )}
+            </div>
+
+            {/* Upload Button */}
+            <div className="flex justify-end gap-3 mt-4">
               <Button
                 variant="outline"
                 onClick={() => setFiles([])}
@@ -283,38 +456,43 @@ export default function FileUpload({
               >
                 Clear All
               </Button>
-              
               <Button
                 onClick={uploadFiles}
-                disabled={uploading || files.length === 0}
+                disabled={files.length === 0 || uploading || files.some(f => f.status === 'error')}
+                className="bg-brand-dark-cyan hover:bg-brand-midnight text-white"
               >
                 {uploading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Uploading...
                   </>
                 ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload {files.length} File{files.length !== 1 ? 's' : ''}
-                  </>
+                  'Upload Files'
                 )}
               </Button>
             </div>
-          )}
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Help Text */}
-          <Alert>
-            <AlertDescription>
-              <strong>Supported formats:</strong>
-              <ul className="mt-1 space-y-1 text-sm">
-                <li>• <strong>TXT files:</strong> Plain text documents</li>
-                <li>• <strong>DOCX files:</strong> Microsoft Word documents</li>
-              </ul>
-            </AlertDescription>
-          </Alert>
-        </div>
-      </DialogContent>
-    </Dialog>
+      {/* Error Display */}
+      {error && (
+        <Alert className="border-red-200 bg-red-50">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Upload Result */}
+      {uploadResult && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Upload successful!</strong> Processing {uploadResult.files_processed || files.length} files.
+            The content will be available for chat once processing is complete.
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
   )
 }

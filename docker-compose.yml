@@ -1,5 +1,4 @@
-# Simplified docker-compose.yml - Google + Weaviate
-
+# Simplified docker-compose.yml - Google + External Qdrant
 services:
   backend:
     build: .
@@ -19,36 +18,16 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
       - TMPDIR=/app/tmp
-      # Weaviate configuration
-      - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
+      # External Qdrant configuration
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_COLLECTION=kb_chunks
     volumes:
       - transformers_cache:/app/cache
       - playwright_cache:/home/appuser/.cache/ms-playwright
       - upload_storage:/app/uploads
-      - temp_storage:/app/tmp
-    depends_on:
-      - weaviate
-    restart: unless-stopped
-    networks:
-      - saas-network
-
-  weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.30.0
-    container_name: weaviate
-    ports:
-      - "8080:8080"
-      - "50051:50051"
-    environment:
-      - QUERY_DEFAULTS_LIMIT=25
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      - DEFAULT_VECTORIZER_MODULE=none
-      - ENABLE_MODULES=
-      - CLUSTER_HOSTNAME=node1
-      - GRPC_PORT=50051
-    volumes:
-      - weaviate_data:/var/lib/weaviate
+      - temp_storage:/app/tmp:rw
+    user: "1000:1000"  # Use host user permissions
     restart: unless-stopped
     networks:
       - saas-network
@@ -62,4 +41,7 @@ volumes:
   playwright_cache:
   upload_storage:
   temp_storage:
-  weaviate_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
