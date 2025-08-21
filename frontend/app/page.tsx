@@ -1,10 +1,12 @@
 "use client"
 import { useState, useEffect, useCallback } from "react"
+import type React from "react"
+
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import Script from 'next/script';
+import Script from "next/script"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Label } from "@/components/ui/label"
@@ -14,13 +16,14 @@ import {
   CheckCircle,
   ArrowRight,
   Play,
-  MessageSquare,
   Sparkles,
   Loader2,
-  X,
   AlertCircle,
+  Zap,
+  Users,
+  TrendingUp,
 } from "lucide-react"
-import { FaGoogle} from "react-icons/fa"
+import { FaGoogle } from "react-icons/fa"
 import Link from "next/link"
 
 // Import the new components
@@ -60,19 +63,16 @@ export default function LandingPage() {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState("")
   const [loginForm, setLoginForm] = useState({ email: "", password: "" })
-  const [registerForm, setRegisterForm] = useState({ 
-    email: "", 
-    password: "", 
-    full_name: "", 
-    confirmPassword: "" 
+  const [registerForm, setRegisterForm] = useState({
+    email: "",
+    password: "",
+    full_name: "",
+    confirmPassword: "",
   })
 
-    // YouTube Modal State
+  // YouTube Modal State
   const [showVideoModal, setShowVideoModal] = useState(false)
   const videoId = "RzSYv7bkrpc" // Extracted from https://youtu.be/RzSYv7bkrpc?si=rCiq0vkZHtCrpw7s
-
-  {/* YouTube Modal */}
-
 
   const handleWatchDemo = () => {
     setShowVideoModal(true)
@@ -108,9 +108,9 @@ export default function LandingPage() {
   useEffect(() => {
     const handleOAuthCallback = async () => {
       const urlParams = new URLSearchParams(window.location.search)
-      const oauthToken = urlParams.get('token')
-      const error = urlParams.get('error')
-      
+      const oauthToken = urlParams.get("token")
+      const error = urlParams.get("error")
+
       if (error) {
         setAuthError(decodeURIComponent(error))
         setShowAuthModal(true)
@@ -118,7 +118,7 @@ export default function LandingPage() {
         window.history.replaceState({}, document.title, window.location.pathname)
         return
       }
-      
+
       if (oauthToken) {
         try {
           // Fetch user info
@@ -127,14 +127,14 @@ export default function LandingPage() {
               Authorization: `Bearer ${oauthToken}`,
             },
           })
-          
+
           if (userResponse.ok) {
             const userData = await userResponse.json()
             setToken(oauthToken)
             setUser(userData)
             localStorage.setItem("token", oauthToken)
             await fetchKnowledgeBases(oauthToken)
-            
+
             // Clean up URL
             window.history.replaceState({}, document.title, window.location.pathname)
           } else {
@@ -145,12 +145,12 @@ export default function LandingPage() {
           setAuthError("Authentication failed")
           setShowAuthModal(true)
         }
-        
+
         // Clean up URL
         window.history.replaceState({}, document.title, window.location.pathname)
       }
     }
-    
+
     handleOAuthCallback()
   }, [])
 
@@ -210,7 +210,7 @@ export default function LandingPage() {
   const handleGoogleAuth = async () => {
     setAuthLoading(true)
     setAuthError("")
-    
+
     try {
       // Redirect to Google OAuth
       window.location.href = `${API_BASE}/auth/google`
@@ -227,7 +227,7 @@ export default function LandingPage() {
     try {
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register"
       const formData = authMode === "login" ? loginForm : registerForm
-      
+
       // Validation for register mode
       if (authMode === "register") {
         if (!registerForm.full_name.trim()) {
@@ -247,13 +247,14 @@ export default function LandingPage() {
         }
       }
 
-      const body = authMode === "login" 
-        ? { email: formData.email, password: formData.password }
-        : { 
-            email: registerForm.email, 
-            password: registerForm.password, 
-            full_name: registerForm.full_name 
-          }
+      const body =
+        authMode === "login"
+          ? { email: formData.email, password: formData.password }
+          : {
+              email: registerForm.email,
+              password: registerForm.password,
+              full_name: registerForm.full_name,
+            }
 
       const response = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
@@ -267,7 +268,7 @@ export default function LandingPage() {
 
       if (response.ok) {
         const authToken = data.access_token
-        
+
         // Fetch user info to ensure we have complete user data
         let userData = data.user
         if (!userData) {
@@ -285,23 +286,22 @@ export default function LandingPage() {
         setToken(authToken)
         setUser(userData)
         localStorage.setItem("token", authToken)
-        
+
         // Close modal and clear forms
         setShowAuthModal(false)
         setLoginForm({ email: "", password: "" })
         setRegisterForm({ email: "", password: "", full_name: "", confirmPassword: "" })
         setAuthError("")
-        
+
         // Fetch knowledge bases
         await fetchKnowledgeBases(authToken)
-        
+
         // Force re-render to dashboard (this ensures immediate redirect)
         setTimeout(() => {
           if (!user) {
             window.location.reload()
           }
         }, 100)
-        
       } else {
         setAuthError(data.detail || "Authentication failed")
       }
@@ -325,10 +325,7 @@ export default function LandingPage() {
     setShowAuthModal(true)
   }
 
-
-   // Function to open video modal
-
-
+  // Function to open video modal
 
   // Enhanced loading state
   if (loading) {
@@ -348,7 +345,7 @@ export default function LandingPage() {
   // If user is logged in, show dashboard
   if (user && token) {
     return (
-      <Dashboard 
+      <Dashboard
         user={user}
         knowledgeBases={knowledgeBases}
         onLogout={handleLogout}
@@ -375,10 +372,10 @@ export default function LandingPage() {
           <nav className="ml-auto flex items-center gap-6">
             <div className="hidden md:flex items-center gap-6">
               <Link
-                href="/blogs"
+                href="/blog"
                 className="text-sm font-medium text-brand-midnight hover:text-brand-dark-cyan transition-colors"
               >
-                Blogs
+                Blog
               </Link>
               <Link
                 href="#features"
@@ -430,44 +427,52 @@ export default function LandingPage() {
       <section className="relative overflow-hidden bg-gradient-to-br from-white via-brand-powder/10 to-brand-cerulean/5 py-20 lg:py-32">
         <div className="absolute inset-0 bg-grid-pattern opacity-5"></div>
         <div className="container relative px-4 lg:px-6">
-          <div className="grid lg:grid-cols-2 gap-12 items-center max-w-7xl mx-auto">
+          <div className="grid lg:grid-cols-2 gap-16 items-center max-w-7xl mx-auto">
             {/* Left Column - Content */}
-            <div className="text-center lg:text-left">
-              <Badge className="mb-6 bg-brand-dark-cyan/10 text-brand-dark-cyan border-brand-dark-cyan/20 px-4 py-2 text-sm font-medium">
-                <Sparkles className="w-4 h-4 mr-2" />
-                AI-Powered Sales Assistant
-              </Badge>
-              <h1 className="mb-6 text-4xl font-bold tracking-tight text-brand-black lg:text-6xl font-display">
-                Convert Visitors into{" "}
-                <span className="bg-gradient-to-r from-brand-dark-cyan to-brand-cerulean bg-clip-text text-transparent">
-                  Customers
-                </span>{" "}
-                with AI
-              </h1>
-              <p className="mb-8 text-lg text-brand-midnight/70 lg:text-xl">
-                Intelligent AI chat agents that understand your business, answer questions instantly, and guide prospects
-                through your sales funnel 24/7.
-              </p>
+            <div className="text-center lg:text-left space-y-8">
+              <div className="space-y-6">
+                <Badge className="bg-brand-dark-cyan/10 text-brand-dark-cyan border-brand-dark-cyan/20 px-4 py-2 text-sm font-medium">
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  AI-Powered Sales Assistant
+                </Badge>
+
+                <h1 className="text-4xl font-bold tracking-tight text-brand-black lg:text-6xl font-display leading-tight">
+                  Convert Visitors into{" "}
+                  <span className="bg-gradient-to-r from-brand-dark-cyan to-brand-cerulean bg-clip-text text-transparent">
+                    Customers
+                  </span>{" "}
+                  with AI
+                </h1>
+
+                <p className="text-lg text-brand-midnight/70 lg:text-xl max-w-2xl">
+                  Intelligent AI chat agents that understand your business, answer questions instantly, and guide
+                  prospects through your sales funnel 24/7.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
                 <Button
                   size="lg"
                   onClick={() => handleGetStarted()}
-                  className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white px-8 py-3 text-lg font-semibold shadow-lg hover:shadow-xl transition-all"
+                  className="bg-brand-dark-cyan hover:bg-brand-cerulean text-white px-8 py-4 text-lg font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
                 >
-                  Get Started
+                  Get Started Free
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
                 <Button
                   variant="outline"
                   size="lg"
                   onClick={handleWatchDemo}
-                  className="border-brand-dark-cyan text-brand-dark-cyan hover:bg-brand-dark-cyan hover:text-white px-8 py-3 text-lg font-semibold bg-transparent"
+                  className="border-brand-dark-cyan text-brand-dark-cyan hover:bg-brand-dark-cyan hover:text-white px-8 py-4 text-lg font-semibold bg-transparent"
                 >
                   <Play className="mr-2 h-5 w-5" />
                   Watch Demo
                 </Button>
               </div>
-              <div className="mt-12 flex justify-center lg:justify-start gap-8 text-sm text-brand-midnight/60">
+
+              {/* Trust Indicators */}
+              <div className="flex flex-wrap justify-center lg:justify-start gap-6 text-sm text-brand-midnight/60">
                 <div className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-green-500" />
                   No credit card required
@@ -481,92 +486,29 @@ export default function LandingPage() {
                   24/7 support
                 </div>
               </div>
-            </div>
 
-            {/* Right Column - Widget Preview */}
-            <div className="relative">
-              <div className="relative bg-gradient-to-br from-gray-100 to-gray-200 rounded-2xl p-8 shadow-2xl">
-                {/* Browser mockup */}
-                <div className="bg-white rounded-lg shadow-lg overflow-hidden py-6">
-                  <div className="bg-gray-100 px-4 py-3 flex items-center gap-2">
-                    <div className="flex gap-2">
-                      <div className="w-3 h-3 rounded-full bg-red-400"></div>
-                      <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
-                      <div className="w-3 h-3 rounded-full bg-green-400"></div>
-                    </div>
-                    <div className="flex-1 text-center">
-                      <div className="bg-white rounded px-3 py-1 text-xs text-gray-500">
-                        salesdok.com
-                      </div>
-                    </div>
-                  </div>
-                  <div className="h-64 bg-gradient-to-br from-blue-50 to-indigo-100 relative">
-                    <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <div className="text-4xl mb-2">🏢</div>
-                        <div className="text-sm">Your Website</div>
-                      </div>
-                    </div>
-                    
-                    {/* Widget Preview */}
-                    <div className="absolute bottom-4 right-4">
-                      <div className="bg-white rounded-lg shadow-xl max-w-xs">
-                        {/* Widget Header */}
-                        <div className="bg-brand-dark-cyan text-white px-4 py-3 rounded-t-lg flex justify-between items-center">
-                          <h4 className="font-semibold text-sm">Chat Support</h4>
-                          <button className="text-white/80 hover:text-white">
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                        
-                        {/* Messages */}
-                        <div className="p-4 space-y-3 max-h-40 overflow-y-auto">
-                          <div className="bg-gray-100 rounded-lg p-3 text-sm">
-                            Hi! How can I help you today?
-                          </div>
-                          <div className="bg-brand-dark-cyan text-white rounded-lg p-3 text-sm ml-8">
-                            What are your pricing plans?
-                          </div>
-                          <div className="bg-gray-100 rounded-lg p-3 text-sm">
-                            We offer flexible pricing starting at $25/month...
-                          </div>
-                        </div>
-                        
-                        {/* Input */}
-                        <div className="p-4 border-t border-gray-300 flex gap-2">
-                          <input 
-                            type="text" 
-                            placeholder="Type your message..."
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-full text-xs outline-none"
-                            readOnly
-                          />
-                          <button className="bg-brand-dark-cyan text-white rounded-full p-2">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                            </svg>
-                          </button>
-                        </div>
-                        
-                        {/* Branding */}
-                        <div className="text-center py-2 text-xs text-gray-500">
-                          Powered by <span className="text-brand-dark-cyan font-medium">Salesdok</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+              {/* Social Proof Stats */}
+              <div className="grid grid-cols-3 gap-6 pt-8 border-t border-brand-timberwolf/20">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-brand-dark-cyan">10K+</div>
+                  <div className="text-sm text-brand-midnight/60">Active Users</div>
                 </div>
-                
-                {/* Floating elements */}
-                <div className="absolute -top-4 -left-4 bg-brand-dark-cyan text-white rounded-full p-3 shadow-lg">
-                  <MessageSquare className="w-6 h-6" />
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-brand-dark-cyan">40%</div>
+                  <div className="text-sm text-brand-midnight/60">Avg. Conversion Boost</div>
                 </div>
-                <div className="absolute -bottom-4 -right-4 bg-brand-cerulean text-white rounded-full p-3 shadow-lg">
-                  <Bot className="w-6 h-6" />
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-brand-dark-cyan">24/7</div>
+                  <div className="text-sm text-brand-midnight/60">Always Available</div>
                 </div>
               </div>
-              
-              {/* Pulse animation */}
-              <div className="absolute -top-2 -right-2 w-4 h-4 bg-green-400 rounded-full animate-pulse"></div>
+            </div>
+
+            {/* Right Column - GIF/Demo Area */}
+            <div className="relative">
+     <video>
+      
+     </video>
             </div>
           </div>
         </div>
@@ -588,16 +530,14 @@ export default function LandingPage() {
       <section className="bg-gradient-to-r from-brand-dark-cyan to-brand-cerulean py-20">
         <div className="container px-4 lg:px-6">
           <div className="mx-auto max-w-3xl text-center text-white">
-            <h2 className="mb-4 text-3xl font-bold lg:text-4xl font-display">
-              Ready to Transform Your Sales Process?
-            </h2>
+            <h2 className="mb-4 text-3xl font-bold lg:text-4xl font-display">Ready to Transform Your Sales Process?</h2>
             <p className="mb-8 text-lg opacity-90">
               Join thousands of businesses already using AI to boost their conversion rates and sales.
             </p>
             <Button
               size="lg"
               onClick={() => handleGetStarted()}
-              className="bg-white text-brand-dark-cyan hover:bg-gray-100 px-8 py-3 text-lg font-semibold shadow-lg"
+              className="bg-white text-brand-dark-cyan hover:bg-gray-100 px-8 py-3 text-lg font-semibold shadow-lg transform hover:scale-105 transition-all"
             >
               Get Started Today
               <ArrowRight className="ml-2 h-5 w-5" />
@@ -607,27 +547,27 @@ export default function LandingPage() {
       </section>
 
       <YouTubeModal
-  isOpen={showVideoModal}
-  onClose={() => setShowVideoModal(false)}
-  videoId={videoId}
-  title="Salesdok Demo Video"
-/>
+        isOpen={showVideoModal}
+        onClose={() => setShowVideoModal(false)}
+        videoId={videoId}
+        title="Salesdok Demo Video"
+      />
 
       {/* AI Chatbot Widget Script */}
       <Script
         id="salesdok-chatbot-script" // Unique ID for the script
-        src="https://api.salesdok.com/widget/widget_6fc92b09b904462f/script.js"
+        src="https://api.salesdok.com/widget/widget_1bc5682831ae4010/script.js"
         strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
       />
 
-   {/* Footer */}
+      {/* Footer */}
       <footer className="border-t border-brand-timberwolf/20 bg-white py-12">
         <div className="container px-4 lg:px-6">
           <div className="grid gap-8 lg:grid-cols-4">
             <div className="lg:col-span-2">
               <Link href="/" className="flex items-center gap-3 mb-4">
                 <Bot className="h-8 w-8 text-brand-dark-cyan" />
-                  <span className="text-3xl font-logo font-bold text-brand-midnight">Salesdok</span>
+                <span className="text-3xl font-logo font-bold text-brand-midnight">Salesdok</span>
               </Link>
               <p className="text-brand-midnight/60 max-w-md">
                 The most powerful AI sales assistant for modern businesses. Automate your customer interactions and
@@ -637,58 +577,84 @@ export default function LandingPage() {
             <div>
               <h3 className="font-semibold text-brand-black mb-4">Product</h3>
               <ul className="space-y-2 text-brand-midnight/60">
-                <li><Link href="#features" className="hover:text-brand-dark-cyan transition-colors">Features</Link></li>
-                <li><Link href="#integration" className="hover:text-brand-dark-cyan transition-colors">Integration</Link></li>
-                <li><Link href="#pricing" className="hover:text-brand-dark-cyan transition-colors">Pricing</Link></li>
+                <li>
+                  <Link href="#features" className="hover:text-brand-dark-cyan transition-colors">
+                    Features
+                  </Link>
+                </li>
+                <li>
+                  <Link href="#integration" className="hover:text-brand-dark-cyan transition-colors">
+                    Integration
+                  </Link>
+                </li>
+                <li>
+                  <Link href="#pricing" className="hover:text-brand-dark-cyan transition-colors">
+                    Pricing
+                  </Link>
+                </li>
               </ul>
             </div>
             <div>
               <h3 className="font-semibold text-brand-black mb-4">Support</h3>
               <ul className="space-y-2 text-brand-midnight/60">
-                <li><Link href="#" className="hover:text-brand-dark-cyan transition-colors">Documentation</Link></li>
-                <li><Link href="#" className="hover:text-brand-dark-cyan transition-colors">Help Center</Link></li>
-                <li><Link href="#" className="hover:text-brand-dark-cyan transition-colors">Contact</Link></li>
+                <li>
+                  <Link href="#" className="hover:text-brand-dark-cyan transition-colors">
+                    Documentation
+                  </Link>
+                </li>
+                <li>
+                  <Link href="#" className="hover:text-brand-dark-cyan transition-colors">
+                    Help Center
+                  </Link>
+                </li>
+                <li>
+                  <Link href="#" className="hover:text-brand-dark-cyan transition-colors">
+                    Contact
+                  </Link>
+                </li>
               </ul>
             </div>
           </div>
-          
+
           {/* Compliance Section */}
           <div className="mt-4 pt-6 border-t border-brand-timberwolf/20">
             <div className="flex flex-col items-center space-y-4">
-              <p className="text-sm text-brand-midnight/60 font-medium">Salesdok is compliant by SOC2, PCI DSS, uses AES-256 Encryption, and GDPR Ready</p>
+              <p className="text-sm text-brand-midnight/60 font-medium">
+                Salesdok is compliant by SOC2, PCI DSS, uses AES-256 Encryption, and GDPR Ready
+              </p>
               <div className="flex flex-wrap items-center justify-center gap-6">
                 {/* SOC2 Compliance Logo */}
                 <div className="group cursor-pointer">
                   <img
-                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-soc2_F2uA39lEs.png" 
-                    alt="SOC 2 Type II Compliant" 
+                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-soc2_F2uA39lEs.png"
+                    alt="SOC 2 Type II Compliant"
                     className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
                   />
                 </div>
 
                 {/* PCI DSS Compliance Logo */}
                 <div className="group cursor-pointer">
-                  <img 
-                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-pci-dss_sZba9QwWd.png" 
-                    alt="PCI DSS Compliant" 
+                  <img
+                    src="https://ik.imagekit.io/90xvn3fidvl/salesdok-pci-dss_sZba9QwWd.png"
+                    alt="PCI DSS Compliant"
                     className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
                   />
                 </div>
 
                 {/* AES Encryption Logo */}
                 <div className="group cursor-pointer">
-                  <img 
-                    src="https://ik.imagekit.io/90xvn3fidvl/AES256_mha8Hcxga.webp" 
-                    alt="AES-256 Encryption" 
+                  <img
+                    src="https://ik.imagekit.io/90xvn3fidvl/AES256_mha8Hcxga.webp"
+                    alt="AES-256 Encryption"
                     className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
                   />
                 </div>
 
                 {/* GDPR Compliance Logo */}
                 <div className="group cursor-pointer">
-                  <img 
-                    src="https://ik.imagekit.io/90xvn3fidvl/GDPR-ready_omM9jc7iw7.png" 
-                    alt="GDPR Ready" 
+                  <img
+                    src="https://ik.imagekit.io/90xvn3fidvl/GDPR-ready_omM9jc7iw7.png"
+                    alt="GDPR Ready"
                     className="h-12 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
                   />
                 </div>
@@ -698,9 +664,7 @@ export default function LandingPage() {
 
           <Separator className="my-4" />
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-            <p className="text-brand-midnight/60 text-sm">
-              © 2025 Salesdok. All rights reserved.
-            </p>
+            <p className="text-brand-midnight/60 text-sm">© 2025 Salesdok. All rights reserved.</p>
             <div className="flex gap-4 text-brand-midnight/60 text-sm">
               <Link href="/privacy" className="hover:text-brand-dark-cyan transition-colors">
                 Privacy Policy
@@ -727,7 +691,11 @@ export default function LandingPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <Tabs value={authMode} onValueChange={(value) => setAuthMode(value as "login" | "register")} className="w-full">
+          <Tabs
+            value={authMode}
+            onValueChange={(value) => setAuthMode(value as "login" | "register")}
+            className="w-full"
+          >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Sign In</TabsTrigger>
               <TabsTrigger value="register">Sign Up</TabsTrigger>
@@ -739,7 +707,7 @@ export default function LandingPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  className="w-full flex items-center justify-center gap-2 h-11 hover:bg-red-50 hover:border-red-200 transition-all"
+                  className="w-full flex items-center justify-center gap-2 h-11 hover:bg-red-50 hover:border-red-200 transition-all bg-transparent"
                   onClick={handleGoogleAuth}
                   disabled={authLoading}
                 >
@@ -754,9 +722,7 @@ export default function LandingPage() {
                   <span className="w-full border-t" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-background px-2 text-muted-foreground">
-                    Or continue with email
-                  </span>
+                  <span className="bg-background px-2 text-muted-foreground">Or continue with email</span>
                 </div>
               </div>
 
@@ -769,7 +735,7 @@ export default function LandingPage() {
                       id="email"
                       type="email"
                       value={loginForm.email}
-                      onChange={(e) => setLoginForm(prev => ({ ...prev, email: e.target.value }))}
+                      onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
                       placeholder="Enter your email"
                       required
                     />
@@ -780,7 +746,7 @@ export default function LandingPage() {
                       id="password"
                       type="password"
                       value={loginForm.password}
-                      onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
+                      onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
                       placeholder="Enter your password"
                       required
                     />
@@ -794,7 +760,7 @@ export default function LandingPage() {
                       id="full_name"
                       type="text"
                       value={registerForm.full_name}
-                      onChange={(e) => setRegisterForm(prev => ({ ...prev, full_name: e.target.value }))}
+                      onChange={(e) => setRegisterForm((prev) => ({ ...prev, full_name: e.target.value }))}
                       placeholder="Enter your full name"
                       required
                     />
@@ -805,7 +771,7 @@ export default function LandingPage() {
                       id="reg_email"
                       type="email"
                       value={registerForm.email}
-                      onChange={(e) => setRegisterForm(prev => ({ ...prev, email: e.target.value }))}
+                      onChange={(e) => setRegisterForm((prev) => ({ ...prev, email: e.target.value }))}
                       placeholder="Enter your email"
                       required
                     />
@@ -816,7 +782,7 @@ export default function LandingPage() {
                       id="reg_password"
                       type="password"
                       value={registerForm.password}
-                      onChange={(e) => setRegisterForm(prev => ({ ...prev, password: e.target.value }))}
+                      onChange={(e) => setRegisterForm((prev) => ({ ...prev, password: e.target.value }))}
                       placeholder="Create a password"
                       required
                     />
@@ -827,7 +793,7 @@ export default function LandingPage() {
                       id="confirm_password"
                       type="password"
                       value={registerForm.confirmPassword}
-                      onChange={(e) => setRegisterForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                      onChange={(e) => setRegisterForm((prev) => ({ ...prev, confirmPassword: e.target.value }))}
                       placeholder="Confirm your password"
                       required
                     />
@@ -841,8 +807,8 @@ export default function LandingPage() {
                   </Alert>
                 )}
 
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   className="w-full bg-brand-dark-cyan hover:bg-brand-cerulean text-white"
                   disabled={authLoading}
                 >
@@ -851,8 +817,10 @@ export default function LandingPage() {
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       {authMode === "login" ? "Signing In..." : "Creating Account..."}
                     </>
+                  ) : authMode === "login" ? (
+                    "Sign In"
                   ) : (
-                    authMode === "login" ? "Sign In" : "Create Account"
+                    "Create Account"
                   )}
                 </Button>
               </form>

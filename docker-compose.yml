@@ -1,5 +1,4 @@
-# Updated docker-compose.yml
-
+# Simplified docker-compose.yml - Google + External Qdrant
 services:
   backend:
     build: .
@@ -7,42 +6,28 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DB_HOST=maindock.crao4a2ccsjm.ap-south-1.rds.amazonaws.com
+      - DB_HOST=34.131.25.230
       - DB_PORT=5432
-      - DB_NAME=salesdok
+      - DB_NAME=salesdokdb
       - DB_USER=postgres
       - DB_PASSWORD=${DB_PASSWORD}
-      - MEMCACHE_HOST=memcache
-      - MEMCACHE_PORT=11211
       - TRANSFORMERS_CACHE=/app/cache
       - HF_HOME=/app/cache
       - PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - S3_EMBEDDINGS_BUCKET=storeofvectors
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
-      # Fix temp directory path
       - TMPDIR=/app/tmp
+      # External Qdrant configuration
+      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_COLLECTION=kb_chunks
     volumes:
       - transformers_cache:/app/cache
       - playwright_cache:/home/appuser/.cache/ms-playwright
-      # Add volumes for file uploads and temp storage
       - upload_storage:/app/uploads
-      - temp_storage:/app/tmp
-    depends_on:
-      - memcache
-    restart: unless-stopped
-    networks:
-      - saas-network
-
-  memcache:
-    image: memcached:1.6-alpine
-    container_name: saas-memcache
-    expose:
-      - "11211"
-    command: memcached -m 256 -v
+      - temp_storage:/app/tmp:rw
+    user: "1000:1000"  # Use host user permissions
     restart: unless-stopped
     networks:
       - saas-network
@@ -54,5 +39,9 @@ networks:
 volumes:
   transformers_cache:
   playwright_cache:
-  upload_storage:    # For uploaded files
-  temp_storage:      # For temporary processing
+  upload_storage:
+  temp_storage:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

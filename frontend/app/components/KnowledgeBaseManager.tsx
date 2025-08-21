@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+// components/KnowledgeBaseManager.tsx - Updated with subscription limits
 'use client'
 
 import { useState } from 'react'
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { 
   Plus, 
   Globe, 
@@ -19,10 +20,14 @@ import {
   Clock, 
   Trash2,
   RefreshCw,
+  Crown,
+  AlertTriangle,
+  Database,
 } from 'lucide-react'
 import FileUpload from './FileUpload'
+import { UsageWarning } from './UsageLimits'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.salesdok.com'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 interface KnowledgeBase {
   id: string
@@ -34,12 +39,25 @@ interface KnowledgeBase {
   created_at: string
 }
 
+interface Usage {
+  current_chunk_usage: number
+  max_total_chunks: number
+  remaining_chunks: number
+  current_kb_count: number
+  max_knowledge_bases: number
+  can_create_kb: boolean
+  plan: string
+  status: string
+}
+
 interface KnowledgeBaseManagerProps {
   knowledgeBases: KnowledgeBase[]
   selectedKB: string | null
   onSelectKB: (id: string) => void
   onRefresh: () => void
   token: string
+  usage?: Usage
+  onUpgrade?: () => void
 }
 
 export default function KnowledgeBaseManager({
@@ -47,17 +65,20 @@ export default function KnowledgeBaseManager({
   selectedKB,
   onSelectKB,
   onRefresh,
-  token
+  token,
+  usage,
+  onUpgrade
 }: KnowledgeBaseManagerProps) {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showWebsiteModal, setShowWebsiteModal] = useState(false)
   const [showFileUploadModal, setShowFileUploadModal] = useState(false)
   const [selectedKBForContent, setSelectedKBForContent] = useState<string>('')
-  const [selectedKBForWebsite, setSelectedKBForWebsite] = useState<string>('') // NEW: Track which KB for website
+  const [selectedKBForWebsite, setSelectedKBForWebsite] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [processingKB, setProcessingKB] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [validationLoading, setValidationLoading] = useState(false)
 
   const [newKBForm, setNewKBForm] = useState({
     name: '',
@@ -70,9 +91,57 @@ export default function KnowledgeBaseManager({
     single_page_mode: false
   })
 
+  // Validate if user can create KB
+  const validateKBCreation = async () => {
+    if (!usage) return true
+    
+    if (!usage.can_create_kb) {
+      setError(`Knowledge base limit reached (${usage.current_kb_count}/${usage.max_knowledge_bases}). Upgrade your plan to create more knowledge bases.`)
+      return false
+    }
+    
+    return true
+  }
+
+  // Validate chunk usage for website processing
+  const validateChunkUsage = async (estimatedChunks: number) => {
+    setValidationLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/subscription/validate/chunks/${estimatedChunks}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      if (response.ok) {
+        const validation = await response.json()
+        if (!validation.can_add) {
+          setError(validation.message + ' Consider upgrading your plan.')
+          return false
+        }
+        return true
+      } else {
+        const errorData = await response.json()
+        setError(errorData.detail || 'Failed to validate chunk usage')
+        return false
+      }
+    } catch {
+      setError('Network error during validation')
+      return false
+    } finally {
+      setValidationLoading(false)
+    }
+  }
+
   const createKnowledgeBase = async () => {
     setLoading(true)
     setError('')
+
+    // Validate KB creation limits
+    if (!(await validateKBCreation())) {
+      setLoading(false)
+      return
+    }
 
     try {
       const response = await fetch(`${API_BASE}/knowledge-bases`, {
@@ -92,7 +161,7 @@ export default function KnowledgeBaseManager({
         const data = await response.json()
         setError(data.detail || 'Failed to create knowledge base')
       }
-    } catch (error) {
+    } catch {
       setError('Network error. Please try again.')
     } finally {
       setLoading(false)
@@ -100,10 +169,24 @@ export default function KnowledgeBaseManager({
   }
 
   const processWebsite = async () => {
-    if (!selectedKBForWebsite) return
-    
-    setProcessingKB(selectedKBForWebsite)
+    if (!selectedKBForWebsite) {
+      setError('Please select a knowledge base')
+      return
+    }
+
+    setLoading(true)
     setError('')
+    setProcessingKB(selectedKBForWebsite)
+
+    // Estimate chunks (rough estimate: 1 page ≈ 8 chunks)
+    const estimatedChunks = websiteForm.max_pages * 8
+    
+    // Validate chunk usage
+    if (!(await validateChunkUsage(estimatedChunks))) {
+      setLoading(false)
+      setProcessingKB(null)
+      return
+    }
 
     try {
       const response = await fetch(`${API_BASE}/knowledge-bases/${selectedKBForWebsite}/process-website`, {
@@ -112,40 +195,35 @@ export default function KnowledgeBaseManager({
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          url: websiteForm.url,
-          max_pages: websiteForm.max_pages,
-          single_page_mode: websiteForm.single_page_mode,
-          include_patterns: [],
-          exclude_patterns: ["/blog", "/news"]
-        })
+        body: JSON.stringify(websiteForm)
       })
 
       if (response.ok) {
         setWebsiteForm({ url: '', max_pages: 10, single_page_mode: false })
-        setShowWebsiteModal(false)
         setSelectedKBForWebsite('')
-        setTimeout(() => {
-          onRefresh()
-        }, 1000)
+        setShowWebsiteModal(false)
+        onRefresh()
       } else {
         const data = await response.json()
         setError(data.detail || 'Failed to process website')
+        setProcessingKB(null)
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       setError('Network error. Please try again.')
-    } finally {
       setProcessingKB(null)
+    } finally {
+      setLoading(false)
     }
   }
 
-  const deleteKnowledgeBase = async (kbId: string) => {
+  const deleteKnowledgeBase = async (id: string) => {
     if (!confirm('Are you sure you want to delete this knowledge base? This action cannot be undone.')) {
       return
     }
 
     try {
-      const response = await fetch(`${API_BASE}/knowledge-bases/${kbId}`, {
+      const response = await fetch(`${API_BASE}/knowledge-bases/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -154,290 +232,388 @@ export default function KnowledgeBaseManager({
 
       if (response.ok) {
         onRefresh()
-        if (selectedKB === kbId) {
+        if (selectedKB === id) {
           onSelectKB('')
         }
       } else {
         const data = await response.json()
         setError(data.detail || 'Failed to delete knowledge base')
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       setError('Network error. Please try again.')
     }
   }
 
-  const handleFileUploadComplete = () => {
-    setShowFileUploadModal(false)
-    setSelectedKBForContent('')
-    onRefresh()
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    await onRefresh()
+    setRefreshing(false)
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'ready':
-        return <Badge variant="default" className="bg-green-100 text-green-800 border-green-200">Ready</Badge>
-      case 'processing':
-        return <Badge variant="default" className="bg-yellow-100 text-yellow-800 border-yellow-200">Processing</Badge>
-      case 'error':
-        return <Badge variant="destructive">Error</Badge>
-      default:
-        return <Badge variant="secondary">Not Ready</Badge>
-    }
-  }
+  // const getStatusColor = (status: string) => {
+  //   switch (status) {
+  //     case 'ready': return 'bg-green-500'
+  //     case 'processing': return 'bg-yellow-500'
+  //     case 'error': return 'bg-red-500'
+  //     default: return 'bg-gray-400'
+  //   }
+  // }
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'ready':
-        return <CheckCircle className="h-4 w-4 text-green-500" />
-      case 'processing':
-        return <Loader2 className="h-4 w-4 text-yellow-500 animate-spin" />
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />
-      default:
-        return <Clock className="h-4 w-4 text-gray-400" />
+      case 'ready': return <CheckCircle className="h-4 w-4 text-green-500" />
+      case 'processing': return <Clock className="h-4 w-4 text-yellow-500" />
+      case 'error': return <AlertCircle className="h-4 w-4 text-red-500" />
+      default: return <Database className="h-4 w-4 text-gray-400" />
     }
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric'
-    })
-  }
-
-  const handleRefresh = async () => {
-    setRefreshing(true)
-    try {
-      await onRefresh()
-    } finally {
-      setTimeout(() => {
-        setRefreshing(false)
-      }, 500)
-    }
-  }
+  const canCreateKB = usage ? usage.can_create_kb : true
+  const showUsageWarning = usage && (
+    usage.remaining_chunks < 50 || 
+    !usage.can_create_kb ||
+    (usage.current_chunk_usage / usage.max_total_chunks) > 0.8
+  )
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Knowledge Bases</h2>
-        <div className="flex items-center gap-2">
-          <Button 
-            size="sm" 
+        <div>
+          <h2 className="text-2xl font-bold text-brand-black">Knowledge Bases</h2>
+          <p className="text-brand-midnight/70">Manage your AI training data and content</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
             variant="outline"
+            size="sm"
             onClick={handleRefresh}
             disabled={refreshing}
-            className="flex items-center gap-1"
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Refreshing...' : 'Refresh'}
+            {refreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
           </Button>
-
-          <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-            <DialogTrigger asChild>
-              <Button size="sm">
-                <Plus className="h-4 w-4 mr-1" />
-                New KB
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create Knowledge Base</DialogTitle>
-                <DialogDescription>
-                  Create a new knowledge base to organize your content and train your chatbot.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <Label className="pb-2" htmlFor="name">Name</Label>
-                  <Input
-                    id="name"
-                    value={newKBForm.name}
-                    onChange={(e) => setNewKBForm(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g., Customer Support, Product Documentation"
-                  />
-                </div>
-                <div>
-                  <Label className="pb-2" htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    value={newKBForm.description}
-                    onChange={(e) => setNewKBForm(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="Brief description of what this knowledge base contains..."
-                    rows={3}
-                  />
-                </div>
-                {error && (
-                  <Alert>
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>{error}</AlertDescription>
-                  </Alert>
-                )}
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setShowCreateModal(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={createKnowledgeBase} disabled={loading || !newKBForm.name.trim()}>
-                    {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                    Create
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
-
-      {/* Knowledge Bases List */}
-      <div className={knowledgeBases.length === 0 ? "" : "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4"}>
-        {knowledgeBases.length === 0 ? (
-          <div className="text-center py-8 text-gray-500 col-span-full">
-            <div className="text-2xl mb-2">📚</div>
-            <p className="text-sm">No knowledge bases yet.</p>
-            <p className="text-xs">Create one to get started!</p>
-          </div>
-        ) : (
-          knowledgeBases.map((kb) => (
-            <div key={kb.id}>
-              <div 
-                className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                  selectedKB === kb.id 
-                    ? 'border-blue-500 bg-blue-50' 
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                }`}
-                onClick={() => onSelectKB(kb.id)}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <h3 className="font-medium text-sm">{kb.name}</h3>
-                  <div className="flex items-center gap-1">
-                    {getStatusBadge(kb.status)}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        deleteKnowledgeBase(kb.id)
-                      }}
-                      className="h-6 w-6 p-0 hover:bg-red-100 hover:text-red-600"
+          
+          {canCreateKB ? (
+            <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+              <DialogTrigger asChild>
+                <Button className="bg-brand-dark-cyan hover:bg-brand-midnight text-white">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Knowledge Base
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New Knowledge Base</DialogTitle>
+                  <DialogDescription>
+                    Create a new knowledge base to organize your content.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="name">Name</Label>
+                    <Input
+                      id="name"
+                      value={newKBForm.name}
+                      onChange={(e) => setNewKBForm(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="e.g., Product Documentation"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="description">Description (Optional)</Label>
+                    <Textarea
+                      id="description"
+                      value={newKBForm.description}
+                      onChange={(e) => setNewKBForm(prev => ({ ...prev, description: e.target.value }))}
+                      placeholder="Brief description of this knowledge base"
+                      rows={3}
+                    />
+                  </div>
+                  {error && (
+                    <Alert className="border-red-200 bg-red-50">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="flex justify-end gap-3">
+                    <Button variant="outline" onClick={() => setShowCreateModal(false)}>
+                      Cancel
+                    </Button>
+                    <Button 
+                      onClick={createKnowledgeBase}
+                      disabled={!newKBForm.name || loading}
+                      className="bg-brand-dark-cyan hover:bg-brand-midnight text-white"
                     >
-                      <Trash2 className="h-3 w-3" />
+                      {loading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        'Create Knowledge Base'
+                      )}
                     </Button>
                   </div>
                 </div>
-                
-                {kb.description && (
-                  <p className="text-xs text-gray-600 mb-2">{kb.description}</p>
-                )}
-                
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>{kb.total_chunks} chunks</span>
-                  <span>Created {formatDate(kb.created_at)}</span>
-                </div>
-                
-                {/* Content Addition Options */}
-                {(kb.status === 'not_ready' || kb.status === 'ready') && (
-                  <div className="mt-3 pt-2 border-t">
-                    <div className="flex gap-2">
-                      {/* Website Processing Button - NO Dialog here anymore */}
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="flex-1"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedKBForWebsite(kb.id)
-                          setShowWebsiteModal(true)
-                        }}
-                      >
-                        <Globe className="h-3 w-3 mr-1" />
-                        Add Webpage
-                      </Button>
-
-                      {/* File Upload Button */}
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="flex-1"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedKBForContent(kb.id)
-                          setShowFileUploadModal(true)
-                        }}
-                      >
-                        <Upload className="h-3 w-3 mr-1" />
-                        Upload Files
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
-        )}
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button 
+              variant="outline"
+              onClick={onUpgrade}
+              className="border-orange-300 text-orange-600 hover:bg-orange-50"
+            >
+              <Crown className="h-4 w-4 mr-2" />
+              Upgrade to Create More
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* MOVED OUTSIDE: Single Website Processing Modal */}
-      <Dialog open={showWebsiteModal} onOpenChange={setShowWebsiteModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Process Webpage</DialogTitle>
-            <DialogDescription>
-              Enter a website URL to extract and process its content for this knowledge base.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label className="pb-2" htmlFor="url">Website URL</Label>
-              <Input
-                id="url"
-                type="url"
-                value={websiteForm.url}
-                onChange={(e) => setWebsiteForm(prev => ({ ...prev, url: e.target.value }))}
-                placeholder="https://example.com"
-              />
-            </div>
-            <div>
-              <Label className="pb-2" htmlFor="max_pages">Maximum Pages to Process</Label>
-              <Input
-                id="max_pages"
-                type="number"
-                value={websiteForm.max_pages}
-                onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 10 }))}
-                min="1"
-                max="10"
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowWebsiteModal(false)}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={processWebsite} 
-                disabled={!websiteForm.url.trim() || processingKB === selectedKBForWebsite}
-              >
-                {processingKB === selectedKBForWebsite ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : null}
-                Process Website
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Usage Warning */}
+      {usage && showUsageWarning && (
+        <UsageWarning usage={usage} onUpgrade={onUpgrade} />
+      )}
 
-      {/* File Upload Modal */}
-      <FileUpload
-        knowledgeBaseId={selectedKBForContent}
-        token={token}
-        onUploadComplete={handleFileUploadComplete}
-        isOpen={showFileUploadModal}
-        onOpenChange={setShowFileUploadModal}
-      />
+      {/* Knowledge Bases Grid */}
+      {knowledgeBases.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {knowledgeBases.map((kb) => (
+            <Card
+              key={kb.id}
+              className={`cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                selectedKB === kb.id ? 'ring-2 ring-brand-dark-cyan border-brand-dark-cyan' : ''
+              } ${processingKB === kb.id ? 'opacity-75' : ''}`}
+              onClick={() => onSelectKB(kb.id)}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {getStatusIcon(kb.status)}
+                    <Badge variant="outline" className="text-xs">
+                      {kb.status}
+                    </Badge>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-red-500 hover:bg-red-50 hover:text-red-700"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteKnowledgeBase(kb.id)
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <CardTitle className="text-lg truncate">{kb.name}</CardTitle>
+                {kb.description && (
+                  <p className="text-sm text-brand-midnight/70 line-clamp-2">
+                    {kb.description}
+                  </p>
+                )}
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-brand-midnight/70">Data Chunks</span>
+                    <span className="font-medium">{kb.total_chunks.toLocaleString()}</span>
+                  </div>
+                  
+                  {kb.last_updated && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-brand-midnight/70">Last Updated</span>
+                      <span className="font-medium">
+                        {new Date(kb.last_updated).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
 
-      {error && (
-        <Alert>
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+                  {/* Action Buttons */}
+                  <div className="flex gap-2 pt-2">
+                    <Dialog open={showWebsiteModal && selectedKBForWebsite === kb.id} 
+                            onOpenChange={(open) => {
+                              setShowWebsiteModal(open)
+                              if (open) setSelectedKBForWebsite(kb.id)
+                              else setSelectedKBForWebsite('')
+                            }}>
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Globe className="h-3 w-3 mr-1" />
+                          Website
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Add Website Content</DialogTitle>
+                          <DialogDescription>
+                            Extract content from a website to add to {kb.name}
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div>
+                            <Label htmlFor="url">Website URL</Label>
+                            <Input
+                              id="url"
+                              type="url"
+                              value={websiteForm.url}
+                              onChange={(e) => setWebsiteForm(prev => ({ ...prev, url: e.target.value }))}
+                              placeholder="https://example.com"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="max_pages">Maximum Pages to Process</Label>
+                            <Input
+                              id="max_pages"
+                              type="number"
+                              min="1"
+                              max="50"
+                              value={websiteForm.max_pages}
+                              onChange={(e) => setWebsiteForm(prev => ({ ...prev, max_pages: parseInt(e.target.value) || 10 }))}
+                            />
+                            <p className="text-xs text-brand-midnight/60 mt-1">
+                              Estimated chunks: ~{websiteForm.max_pages * 8} 
+                              {usage && usage.max_total_chunks !== -1 && (
+                                <span className="ml-1">
+                                  (You have {usage.remaining_chunks} remaining)
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          {error && (
+                            <Alert className="border-red-200 bg-red-50">
+                              <AlertTriangle className="h-4 w-4" />
+                              <AlertDescription>{error}</AlertDescription>
+                            </Alert>
+                          )}
+                          <div className="flex justify-end gap-3">
+                            <Button 
+                              variant="outline" 
+                              onClick={() => {
+                                setShowWebsiteModal(false)
+                                setSelectedKBForWebsite('')
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button 
+                              onClick={processWebsite}
+                              disabled={!websiteForm.url || loading || validationLoading}
+                              className="bg-brand-dark-cyan hover:bg-brand-midnight text-white"
+                            >
+                              {loading || validationLoading ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  {validationLoading ? 'Validating...' : 'Processing...'}
+                                </>
+                              ) : (
+                                'Process Website'
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+
+                    <Dialog open={showFileUploadModal && selectedKBForContent === kb.id} 
+                            onOpenChange={(open) => {
+                              setShowFileUploadModal(open)
+                              if (open) setSelectedKBForContent(kb.id)
+                              else setSelectedKBForContent('')
+                            }}>
+                      <DialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Upload className="h-3 w-3 mr-1" />
+                          Files
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>Upload Documents</DialogTitle>
+                          <DialogDescription>
+                            Upload documents to add to {kb.name}
+                          </DialogDescription>
+                        </DialogHeader>
+                        <FileUpload
+                          knowledgeBaseId={kb.id}
+                          token={token}
+                          onUploadComplete={() => {
+                            setShowFileUploadModal(false)
+                            setSelectedKBForContent('')
+                            onRefresh()
+                          }}
+                          usage={usage}
+                          onUpgrade={onUpgrade}
+                        />
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="pt-12 pb-12">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-brand-dark-cyan/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Database className="h-8 w-8 text-brand-dark-cyan" />
+              </div>
+              <h3 className="text-lg font-semibold text-brand-black mb-2">No Knowledge Bases Yet</h3>
+              <p className="text-brand-midnight/60 mb-6 max-w-md mx-auto">
+                Knowledge bases help organize your content. Create your first one to start building your AI assistant.
+              </p>
+              
+              {canCreateKB ? (
+                <Button
+                  onClick={() => setShowCreateModal(true)}
+                  className="bg-brand-dark-cyan hover:bg-brand-midnight text-white"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Your First Knowledge Base
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-orange-600">
+                    You&apos;ve reached your knowledge base limit ({usage?.current_kb_count}/{usage?.max_knowledge_bases})
+                  </p>
+                  <Button
+                    onClick={onUpgrade}
+                    className="bg-brand-cerulean hover:bg-brand-midnight text-white"
+                  >
+                    <Crown className="h-4 w-4 mr-2" />
+                    Upgrade to Create More
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Processing Status */}
+      {processingKB && (
+        <Alert className="border-blue-200 bg-blue-50">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <AlertDescription>
+            <strong>Processing Content:</strong> Your content is being processed. This may take a few minutes.
+            You can continue using the dashboard while processing happens in the background.
+          </AlertDescription>
         </Alert>
       )}
     </div>

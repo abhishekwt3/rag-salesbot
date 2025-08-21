@@ -50,9 +50,9 @@ class KnowledgeBaseStatus(BaseModel):
 # Website processing schemas
 class WebsiteConfig(BaseModel):
     url: HttpUrl
-    max_pages: int = 50
+    max_pages: int = 5
     include_patterns: List[str] = []
-    exclude_patterns: List[str] = ["/blog", "/news"]
+    exclude_patterns: List[str] = [ "/news"]
     single_page_mode: bool = False
 
 class ProcessingResponse(BaseModel):

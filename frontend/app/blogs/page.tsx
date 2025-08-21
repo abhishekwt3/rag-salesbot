@@ -20,6 +20,18 @@ export default function BlogPage() {
       featured: true,
     },
     {
+    id: "state-of-ai-chatbots",
+    title: "The State of AI Sales Chat Agents in E-Commerce",
+    excerpt:
+      "A data-driven deep dive into how AI sales chat agents are reshaping the customer experience and driving more revenue for online retailers in 2025. See trends, results, and actionable strategies.",
+    category: "AI Technology",
+    readTime: "10 min read",
+    audience: "E-Commerce Leaders",
+    difficulty: "Intermediate",
+    icon: Bot,
+    color: "brand-dark-cyan",  // Set to 'false' if you want it in the regular grid instead!
+  },
+    {
       id: "ai-customer-service",
       title: "How AI is Revolutionizing Customer Service in 2024",
       excerpt:
@@ -185,7 +197,7 @@ export default function BlogPage() {
                     variant="outline"
                     className="w-full border-brand-cerulean text-brand-cerulean hover:bg-brand-cerulean hover:text-white bg-transparent"
                   >
-                    <Link href={`/blog/${post.id}`}>
+                    <Link href={`/blogs/${post.id}`}>
                       Read Article
                       <ArrowRight className="ml-2 h-4 w-4" />
                     </Link>

@@ -1,745 +1,521 @@
-# saas_embeddings.py - Multi-tenant Vector Store with Memcache + S3
+# saas_embeddings.py - Multi-tenant Vector Store with Google Embeddings + Qdrant + Incremental Updates
+from __future__ import annotations
+
 import os
-import json
 import time
-import numpy as np
-import pickle
-import gzip
-from typing import List, Dict, Optional
-from datetime import datetime
+import uuid
+import math
+import hashlib
 import logging
-from pathlib import Path
+from datetime import datetime, timezone
+from typing import List, Dict, Optional
 
-# Fast sentence transformers
-from sentence_transformers import SentenceTransformer
-import faiss  # Ultra fast similarity search
-import httpx
+# Google Embedding + Gemini API
+import google.generativeai as genai
 
-# Memcache and S3 clients
-import pymemcache.client.base
-import pymemcache.serde
-import pickle
-import boto3
-from botocore.exceptions import ClientError
+# Qdrant
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+
+# Async helpers
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
+# -----------------------------
+# Utility helpers
+# -----------------------------
+
+_DEF_MAX_WORKERS = int(os.getenv("EMBED_MAX_WORKERS", "8"))
+_DEF_BATCH_SIZE = int(os.getenv("EMBED_BATCH", "32"))
+_DEF_SEARCH_LIMIT = 5
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.getenv(name)
+    return v if v is not None else default
+
+def content_hash(text: str) -> str:
+    """Generate SHA256 hash of content for change detection"""
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+def _chunk_text(text: str, target_words: int = 220, overlap_words: int = 40) -> List[str]:
+    """Word-based chunking with overlap for better context preservation"""
+    words = text.split()
+    if not words:
+        return []
+    chunks = []
+    step = max(1, target_words - overlap_words)
+    for i in range(0, len(words), step):
+        segment = words[i : i + target_words]
+        if not segment:
+            break
+        chunks.append(" ".join(segment).strip())
+        if i + target_words >= len(words):
+            break
+    return chunks
+
+# -----------------------------
+# Main Vector Store
+# -----------------------------
+
 class MemcacheS3VectorStore:
-    """Multi-tenant vector store using Memcache + S3 backend"""
-    
-    def __init__(self, user_id: str, knowledge_base_id: str, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        """Initialize with user and knowledge base IDs"""
-        self.user_id = user_id
-        self.knowledge_base_id = knowledge_base_id
+    """Multi-tenant vector store using Google Embeddings + Qdrant with efficient incremental updates."""
+
+    def __init__(
+        self,
+        user_id: str,
+        knowledge_base_id: str,
+        model_name: str = "models/embedding-001",
+    ):
+        self.user_id = str(user_id)
+        self.knowledge_base_id = str(knowledge_base_id)
         self.model_name = model_name
-        self.model = None
-        self.embeddings = None
-        self.chunks = []
-        self.index = None  # FAISS index for ultra-fast search
-        self.dimension = 384  # all-MiniLM-L6-v2 dimension
-        self.ready = False
-        self.last_updated = None
-        
-        # Speed optimizations
-        self.batch_size = 32  # Process in batches for speed
-        
-        # 🚀 Memcache + S3 Configuration
-        self._setup_clients()
-        
-        # Cache keys for this knowledge base
-        self.cache_prefix = f"embeddings:{user_id}:{knowledge_base_id}"
-        self.chunks_key = f"{self.cache_prefix}:chunks"
-        self.faiss_key = f"{self.cache_prefix}:faiss"
-        self.metadata_key = f"{self.cache_prefix}:metadata"
-        
-        # S3 paths for this knowledge base
-        self.s3_prefix = f"embeddings/{user_id}/{knowledge_base_id}"
-        self.s3_chunks_key = f"{self.s3_prefix}/chunks.json.gz"
-        self.s3_faiss_key = f"{self.s3_prefix}/faiss_index.bin"
-        self.s3_metadata_key = f"{self.s3_prefix}/metadata.json"
-        
-        # Google API key for LLM responses
-        self.google_api_key = os.getenv('GOOGLE_API_KEY')
-        if not self.google_api_key:
-            logger.warning("GOOGLE_API_KEY not found in environment")
-        
-        # Load existing data if available
-        self._load_from_cache_or_s3()
-    
-    def _setup_clients(self):
-        """Setup Memcache and S3 clients"""
+
+        # state
+        self.ready: bool = False
+        self.last_updated: Optional[str] = None
+        self.batch_size: int = _DEF_BATCH_SIZE
+        self.embedding_dim: Optional[int] = None
+
+        # Configure Google APIs
+        google_api_key = _env("GOOGLE_API_KEY")
+        if not google_api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is required")
+        genai.configure(api_key=google_api_key)
+
+        # Single collection with tenant filtering (more scalable)
+        self.collection_name = os.getenv("QDRANT_COLLECTION", "kb_chunks")
+
+        # Qdrant client
+        self.client = self._setup_qdrant()
+        self._load_existing_data()
+
+    def _setup_qdrant(self) -> QdrantClient:
+        """Initialize Qdrant client"""
+        url = _env("QDRANT_URL", "http://localhost:6333")
+        api_key = _env("QDRANT_API_KEY")
+        prefer_grpc = _env("QDRANT_GRPC", "false").lower() in {"1", "true", "yes"}
+
+        if "qdrant:6333" in url:
+            url = url.replace("qdrant:6333", "localhost:6333")
+
+        client = QdrantClient(url=url, api_key=api_key, prefer_grpc=prefer_grpc, timeout=60)
+
         try:
-            # Memcache client
-            memcache_host = os.getenv('MEMCACHE_HOST', 'localhost')
-            memcache_port = int(os.getenv('MEMCACHE_PORT', '11211'))
-            
-            self.memcache = pymemcache.client.base.Client(
-                (memcache_host, memcache_port),
-                serde=pymemcache.serde.pickle_serde,  # Use serde instead
-                connect_timeout=5,
-                timeout=10
-            )
-            
-            # Test memcache connection
-            self.memcache.set('test', 'connection', expire=1)
-            logger.info(f"✅ Connected to Memcache at {memcache_host}:{memcache_port}")
-            
+            _ = client.get_collections()
+            logger.info("✅ Connected to Qdrant at %s", url)
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Memcache: {e}")
-            self.memcache = None
-        
+            logger.error("❌ Failed to connect to Qdrant: %s", e)
+            raise
+
+        return client
+
+    async def _ensure_collection(self):
+        """Create collection if missing with proper dimension"""
+        if self.embedding_dim is None:
+            # Determine dimension by embedding a probe
+            vec = await self._embed_text("dimension probe")
+            if vec is None:
+                raise RuntimeError("Embedding failed. Check GOOGLE_API_KEY.")
+            self.embedding_dim = len(vec)
+
         try:
-            # S3 client
-            self.s3_client = boto3.client(
-                's3',
-                aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-                aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-                region_name=os.getenv('AWS_REGION', 'ap-south-1')
-            )
+            existing = self.client.get_collections().collections
+            names = {c.name for c in existing}
             
-            self.s3_bucket = os.getenv('S3_EMBEDDINGS_BUCKET', 'your-embeddings-bucket')
-            
-            # Test S3 connection
-            self.s3_client.head_bucket(Bucket=self.s3_bucket)
-            logger.info(f"✅ Connected to S3 bucket: {self.s3_bucket}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to S3: {e}")
-            self.s3_client = None
-    
-    def _load_model(self):
-        """Load sentence transformer model with optimizations"""
-        if self.model is None:
-            logger.info(f"Loading model: {self.model_name}")
-            start_time = time.time()
-            
-            # Load with optimizations
-            self.model = SentenceTransformer(self.model_name)
-            self.model.eval()  # Set to evaluation mode
-            
-            load_time = time.time() - start_time
-            logger.info(f"✅ Model loaded in {load_time:.2f}s")
-    
-    def _compress_data(self, data: bytes) -> bytes:
-        """Compress data for storage efficiency"""
-        return gzip.compress(data)
-    
-    def _decompress_data(self, compressed_data: bytes) -> bytes:
-        """Decompress data"""
-        return gzip.decompress(compressed_data)
-    
-    def _save_to_cache_and_s3(self):
-        """Save embeddings and index to Memcache + S3"""
-        try:
-            save_start = time.time()
-            
-            # Prepare data for storage
-            chunks_data = {
-                'chunks': self.chunks,
-                'embeddings': self.embeddings,
-                'last_updated': self.last_updated,
-                'ready': self.ready,
-                'model_name': self.model_name
-            }
-            
-            metadata = {
-                'user_id': self.user_id,
-                'knowledge_base_id': self.knowledge_base_id,
-                'total_chunks': len(self.chunks),
-                'last_updated': self.last_updated,
-                'model_name': self.model_name,
-                'ready': self.ready
-            }
-            
-            # 🚀 Save to Memcache (fast, for immediate access)
-            cache_success = self._save_to_memcache(chunks_data, metadata)
-            
-            # 💾 Save to S3 (persistent, for durability)
-            s3_success = self._save_to_s3(chunks_data, metadata)
-            
-            save_time = time.time() - save_start
-            
-            if cache_success and s3_success:
-                logger.info(f"💾 Saved {len(self.chunks)} chunks to Memcache + S3 in {save_time:.2f}s")
-            elif cache_success:
-                logger.warning(f"⚠️ Saved to Memcache only (S3 failed) in {save_time:.2f}s")
-            elif s3_success:
-                logger.warning(f"⚠️ Saved to S3 only (Memcache failed) in {save_time:.2f}s")
-            else:
-                logger.error(f"❌ Failed to save to both Memcache and S3")
-            
-        except Exception as e:
-            logger.error(f"Error saving to cache and S3: {e}")
-    
-    def _save_to_memcache(self, chunks_data: dict, metadata: dict) -> bool:
-        """Save data to Memcache"""
-        if not self.memcache:
-            return False
-        
-        try:
-            # Cache with 1 hour TTL (3600 seconds)
-            cache_ttl = int(os.getenv('MEMCACHE_TTL', '3600'))
-            
-            # Save chunks and embeddings (largest data)
-            self.memcache.set(self.chunks_key, chunks_data, expire=cache_ttl)
-            
-            # Save FAISS index if available
-            if self.index:
-                faiss_data = faiss.serialize_index(self.index)
-                faiss_bytes = faiss_data.tobytes() if hasattr(faiss_data, 'tobytes') else bytes(faiss_data)
-                self.memcache.set(self.faiss_key, faiss_bytes, expire=cache_ttl)
-    
-            # Save metadata (small, longer TTL)
-            self.memcache.set(self.metadata_key, metadata, expire=cache_ttl * 24)  # 24 hours
-            
-            logger.debug(f"✅ Cached data for {self.cache_prefix}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Memcache save error: {e}")
-            return False
-    
-    def _save_to_s3(self, chunks_data: dict, metadata: dict) -> bool:
-        """Save data to S3"""
-        if not self.s3_client:
-            return False
-        
-        try:
-            # Save compressed chunks data
-            chunks_json = json.dumps(chunks_data).encode('utf-8')
-            compressed_chunks = self._compress_data(chunks_json)
-            
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_chunks_key,
-                Body=compressed_chunks,
-                ContentType='application/gzip',
-                Metadata={
-                    'user-id': self.user_id,
-                    'knowledge-base-id': self.knowledge_base_id,
-                    'total-chunks': str(len(self.chunks))
-                }
-            )
-            
-            # Save FAISS index if available
-            if self.index:
-                faiss_data = faiss.serialize_index(self.index)
-                faiss_bytes = faiss_data.tobytes() if hasattr(faiss_data, 'tobytes') else bytes(faiss_data)
-                self.s3_client.put_object(
-                    Bucket=self.s3_bucket,
-                    Key=self.s3_faiss_key,
-                    Body=faiss_bytes,
-                    ContentType='application/octet-stream'
+            if self.collection_name not in names:
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=self.embedding_dim, distance=Distance.COSINE),
                 )
-            
-            # Save metadata
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_metadata_key,
-                Body=json.dumps(metadata).encode('utf-8'),
-                ContentType='application/json'
-            )
-            
-            logger.debug(f"✅ Saved to S3: {self.s3_prefix}")
-            return True
-            
+                logger.info("✅ Created collection '%s' (dim=%d)", self.collection_name, self.embedding_dim)
         except Exception as e:
-            logger.error(f"❌ S3 save error: {e}")
-            return False
-    
-    def _load_from_cache_or_s3(self):
-        """Load embeddings and index from Memcache or S3"""
+            logger.error("Error ensuring collection: %s", e)
+            raise
+
+    def _load_existing_data(self) -> None:
+        """Check if we have existing data"""
         try:
-            load_start = time.time()
-            # Try Memcache first (fast path)
-            logger.info("🔍 Checking Memcache for existing data...")
-            if self._load_from_memcache():
-                load_time = time.time() - load_start
-                logger.info(f"⚡ MEMCACHE HIT: Loaded {len(self.chunks)} chunks in {load_time:.3f}s (FAST PATH)")
-                return
-            logger.info("❌ Memcache miss - falling back to S3...")
-            
-            # Fallback to S3 (slower but persistent)
-            if self._load_from_s3():
-                s3_load_time = time.time() - load_start
-                logger.info(f"📁 S3 FALLBACK: Loaded {len(self.chunks)} chunks in {s3_load_time:.3f}s (SLOW PATH)")
-                # Cache in Memcache for next time
-                self._cache_in_memcache()
-                logger.info("💾 Cached S3 data to Memcache for faster future access")
-                return
-            
-            logger.info(f"📁 No existing data found for {self.user_id}/{self.knowledge_base_id}")
-            
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-    
-    def _load_from_memcache(self) -> bool:
-        """Load data from Memcache"""
-        if not self.memcache:
-            return False
+            count = self.get_total_chunks()
+            if count > 0:
+                self.ready = True
+                self.last_updated = _now_iso()
+                logger.info("✅ Found %d existing chunks", count)
+        except Exception:
+            logger.info("📭 No existing data found")
+
+    def _point_id(self, source_id: str, chunk_index: int) -> str:
+        """Generate deterministic UUID-format point ID for safe upserts"""
+        base = f"{self.user_id}:{self.knowledge_base_id}:{source_id}:{chunk_index}"
+        hash_hex = content_hash(base)
         
+        # Convert first 32 chars of hash to UUID format
+        # xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        uuid_str = f"{hash_hex[:8]}-{hash_hex[8:12]}-{hash_hex[12:16]}-{hash_hex[16:20]}-{hash_hex[20:32]}"
+        return uuid_str
+
+    def _tenant_filter(self, extra: Optional[List] = None) -> Filter:
+        """Create filter for this tenant+KB"""
+        conditions = [
+            FieldCondition(key="tenant_id", match=MatchValue(value=self.user_id)),
+            FieldCondition(key="kb_id", match=MatchValue(value=self.knowledge_base_id)),
+        ]
+        if extra:
+            conditions.extend(extra)
+        return Filter(must=conditions)
+
+    def _get_existing_points_for_source(self, source_id: str) -> List:
+        """Get all existing points for a source"""
         try:
-            # Load chunks and embeddings
-            chunks_data = self.memcache.get(self.chunks_key)
-            if not chunks_data:
-                return False
+            filter_condition = self._tenant_filter([
+                FieldCondition(key="source_id", match=MatchValue(value=source_id))
+            ])
             
-            self.chunks = chunks_data.get('chunks', [])
-            self.embeddings = chunks_data.get('embeddings', [])
-            self.last_updated = chunks_data.get('last_updated')
-            self.ready = chunks_data.get('ready', False)
-            
-            # Load FAISS index
-            faiss_bytes = self.memcache.get(self.faiss_key)
-            if faiss_bytes:
-                faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
-                self.index = faiss.deserialize_index(faiss_data)
-            
-        except Exception as e:
-            logger.error(f"❌ Memcache load error: {e}")
-            return False
-    
-    def _load_from_s3(self) -> bool:
-        """Load data from S3"""
-        if not self.s3_client:
-            return False
-        
-        try:
-            # Load chunks data
-            response = self.s3_client.get_object(
-                Bucket=self.s3_bucket,
-                Key=self.s3_chunks_key
-            )
-            
-            compressed_data = response['Body'].read()
-            decompressed_data = self._decompress_data(compressed_data)
-            chunks_data = json.loads(decompressed_data.decode('utf-8'))
-            
-            self.chunks = chunks_data.get('chunks', [])
-            self.embeddings = chunks_data.get('embeddings', [])
-            self.last_updated = chunks_data.get('last_updated')
-            self.ready = chunks_data.get('ready', False)
-            
-            # Load FAISS index
-            try:
-                faiss_response = self.s3_client.get_object(
-                    Bucket=self.s3_bucket,
-                    Key=self.s3_faiss_key
+            collected = []
+            offset = None
+            while True:
+                response = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=filter_condition,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
                 )
-                faiss_bytes = faiss_response['Body'].read()
-                faiss_data = np.frombuffer(faiss_bytes, dtype=np.uint8)
-                self.index = faiss.deserialize_index(faiss_data)
-            except ClientError:
-                logger.debug("No FAISS index found in S3, will rebuild")
-            
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                logger.debug(f"No S3 data found for {self.s3_prefix}")
-            else:
-                logger.error(f"❌ S3 load error: {e}")
-            return False
+                points, offset = response
+                collected.extend(points or [])
+                if offset is None or not points:
+                    break
+            return collected
         except Exception as e:
-            logger.error(f"❌ S3 load error: {e}")
-            return False
-    
-    def _cache_in_memcache(self):
-        """Cache currently loaded data in Memcache"""
-        if not self.memcache or not self.chunks:
-            return
-        
-        chunks_data = {
-            'chunks': self.chunks,
-            'embeddings': self.embeddings,
-            'last_updated': self.last_updated,
-            'ready': self.ready,
-            'model_name': self.model_name
-        }
-        
-        metadata = {
-            'user_id': self.user_id,
-            'knowledge_base_id': self.knowledge_base_id,
-            'total_chunks': len(self.chunks),
-            'last_updated': self.last_updated,
-            'ready': self.ready
-        }
-        
-        self._save_to_memcache(chunks_data, metadata)
-    
-    def invalidate_cache(self):
-        """Invalidate Memcache entries for this knowledge base"""
-        if not self.memcache:
-            return
-        
-        try:
-            self.memcache.delete(self.chunks_key)
-            self.memcache.delete(self.faiss_key) 
-            self.memcache.delete(self.metadata_key)
-            logger.info(f"🗑️ Invalidated cache for {self.cache_prefix}")
-        except Exception as e:
-            logger.error(f"Error invalidating cache: {e}")
-    
-    # Keep all existing methods but replace storage calls
-    async def process_pages(self, pages: List[Dict]):
-        """Process pages into vector embeddings"""
-        logger.info(f"🚀 Processing {len(pages)} pages for vector store...")
-        total_start = time.time()
-        
-        # Load model
-        self._load_model()
-        
-        # Step 1: Create chunks
-        logger.info("📝 Step 1: Creating chunks...")
-        chunks_start = time.time()
-        all_chunks = []
-        
-        for i, page in enumerate(pages):
+            logger.warning("Error fetching existing points: %s", e)
+            return []
+
+    async def _generate_embeddings_google(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using Google API with parallel processing"""
+        if not texts:
+            return []
+
+        logger.info("🔄 Processing %d texts with Google Embedding API", len(texts))
+
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=_DEF_MAX_WORKERS)
+
+        def _embed(text: str) -> Optional[List[float]]:
             try:
-                chunks = self._create_chunks(page)
-                all_chunks.extend(chunks)
-                if (i + 1) % 5 == 0:
-                    logger.info(f"   📄 Processed {i+1}/{len(pages)} pages")
+                r = genai.embed_content(model=self.model_name, content=text, task_type="retrieval_document")
+                emb = r["embedding"] if isinstance(r, dict) else getattr(r, "embedding", None)
+                return emb
             except Exception as e:
-                logger.error(f"   ❌ Error with page {i+1}: {e}")
+                logger.error("Embedding error: %s", e)
+                return None
+
+        futures = [loop.run_in_executor(executor, _embed, t) for t in texts]
+        results = await asyncio.gather(*futures)
+
+        dim = self.embedding_dim or 768
+        return [r if (r and isinstance(r, list) and len(r) == dim) else [0.0] * dim for r in results]
+
+    async def _embed_text(self, text: str) -> Optional[List[float]]:
+        """Embed single text"""
+        if not text.strip():
+            return None
+        try:
+            r = genai.embed_content(model=self.model_name, content=text, task_type="retrieval_document")
+            return r["embedding"] if isinstance(r, dict) else getattr(r, "embedding", None)
+        except Exception as e:
+            logger.error("Embedding error: %s", e)
+            return None
+
+    async def _process_single_source(self, text: str, source_id: str, extra_meta: Dict) -> int:
+        """Process single source with incremental updates"""
+        text = (text or "").strip()
+        if not text:
+            return 0
+
+        # Create chunks
+        chunks = _chunk_text(text)
+        if not chunks:
+            return 0
+
+        # Get existing points for this source
+        existing_points = self._get_existing_points_for_source(source_id)
+        existing_by_index = {p.payload.get("chunk_index"): p for p in existing_points}
+
+        # Prepare new/changed chunks
+        points_to_upsert = []
+        upsert_count = 0
+
+        for idx, chunk in enumerate(chunks):
+            chunk_hash = content_hash(chunk)
+            point_id = self._point_id(source_id, idx)
+            
+            # Check if chunk changed
+            existing_point = existing_by_index.get(idx)
+            existing_hash = existing_point.payload.get("chunk_hash") if existing_point else None
+            
+            if existing_hash == chunk_hash:
+                continue  # Unchanged, skip
+            
+            # Embed new/changed chunk
+            vec = await self._embed_text(chunk)
+            if vec is None:
                 continue
-        
-        chunks_time = time.time() - chunks_start
-        logger.info(f"✅ Created {len(all_chunks)} chunks in {chunks_time:.2f}s")
-        
-        if not all_chunks:
-            logger.error("❌ No chunks created!")
-            return
-        
-        # Step 2: Generate embeddings
-        logger.info("🧠 Step 2: Generating embeddings...")
-        embeddings_start = time.time()
-        
-        texts = [chunk['text'] for chunk in all_chunks]
-        embeddings = self._generate_embeddings_fast(texts)
-        
-        embeddings_time = time.time() - embeddings_start
-        logger.info(f"✅ Generated {len(embeddings)} embeddings in {embeddings_time:.2f}s")
-        
-        # Step 3: Build FAISS index
-        logger.info("🔍 Step 3: Building FAISS index...")
-        faiss_start = time.time()
-        
-        embeddings_array = np.array(embeddings).astype('float32')
-        self.index = faiss.IndexFlatIP(self.dimension)  # Inner Product for cosine similarity
-        
-        # Normalize embeddings for cosine similarity
-        faiss.normalize_L2(embeddings_array)
-        self.index.add(embeddings_array)
-        
-        faiss_time = time.time() - faiss_start
-        logger.info(f"✅ FAISS index built in {faiss_time:.2f}s")
-        
-        # Store data
-        self.chunks = all_chunks
-        self.embeddings = embeddings
-        self.ready = True
-        self.last_updated = datetime.now().isoformat()
-        
-        # 🚀 Save to Memcache + S3 instead of disk
-        self._save_to_cache_and_s3()
-        
-        total_time = time.time() - total_start
-        logger.info(f"🎉 Processing complete in {total_time:.2f}s")
-        logger.info(f"📊 Ready for semantic search: {len(self.chunks)} chunks")
-    
-    async def search_similar(self, query: str, max_results: int = 5) -> List[Dict]:
-        """Ultra fast semantic search using FAISS"""
-        if not self.ready:
-            self._load_from_cache_or_s3()
-        
-        if not self.ready or self.index is None:
-            logger.error("❌ Search index not ready!")
-            return []
-        
-        try:
-            # Generate query embedding
-            self._load_model()
-            query_embedding = self.model.encode(
-                [query], 
-                normalize_embeddings=True,
-                convert_to_numpy=True
+
+            payload = {
+                "tenant_id": self.user_id,
+                "kb_id": self.knowledge_base_id,
+                "source_id": source_id,
+                "text": chunk,
+                "chunk_index": idx,
+                "chunk_hash": chunk_hash,
+                "updated_at": _now_iso(),
+                **extra_meta
+            }
+
+            points_to_upsert.append(PointStruct(
+                id=point_id,
+                vector=vec,
+                payload=payload
+            ))
+            upsert_count += 1
+
+        # Upsert changed/new chunks
+        if points_to_upsert:
+            batch_size = max(128, self.batch_size)
+            for i in range(0, len(points_to_upsert), batch_size):
+                batch = points_to_upsert[i:i + batch_size]
+                self.client.upsert(collection_name=self.collection_name, points=batch, wait=True)
+
+        # Delete removed chunks
+        new_indices = set(range(len(chunks)))
+        points_to_delete = []
+        for idx, point in existing_by_index.items():
+            if idx not in new_indices:
+                points_to_delete.append(point.id)
+
+        if points_to_delete:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=points_to_delete,
+                wait=True
             )
-            
-            # FAISS search
-            scores, indices = self.index.search(query_embedding, max_results)
-            
-            results = []
-            for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-                if idx < len(self.chunks):
-                    chunk = self.chunks[idx].copy()
-                    chunk['relevance_score'] = float(score)
-                    results.append(chunk)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error in semantic search: {e}")
-            return []
-    
-    async def process_query(self, question: str, max_results: int = 5) -> Dict:
-        """Process user query using semantic search + LLM"""
-        logger.info(f"🔍 Processing query: '{question[:50]}...'")
-        
-        # Get semantically relevant context
-        context_results = await self.search_similar(question, max_results)
-        
-        if not context_results:
-            return {
-                "answer": "I don't have information about that topic in my knowledge base.",
-                "sources": [],
-                "confidence": 0.0
-            }
-        
-        # Prepare context for LLM
-        context_text = ""
-        sources = []
-        
-        for result in context_results:
-            context_text += f"Source: {result['metadata']['title']}\n"
-            context_text += f"URL: {result['metadata']['source_url']}\n"
-            context_text += f"Content: {result['text']}\n\n"
-            
-            sources.append({
-                "url": result['metadata']['source_url'],
-                "title": result['metadata']['title'],
-                "relevance_score": result['relevance_score']
-            })
-        
-        # Generate response using Gemini
-        if not self.google_api_key:
-            return {
-                "answer": "LLM service not available. Here's the most relevant content: " + context_results[0]['text'],
-                "sources": sources,
-                "confidence": context_results[0]['relevance_score'] if context_results else 0.0
-            }
-        
-        try:
-            prompt = f"""Based on the following context, answer the user's question accurately and concisely.
 
-Context:
-{context_text}
+        return upsert_count
 
-Question: {question}
+    # -----------------------------
+    # Public API
+    # -----------------------------
 
-Instructions:
-- Only use information from the provided context
-- If the context doesn't contain relevant information, say so
-- Provide a clear, helpful answer
-- Don't make up information
+    async def process_pages(self, pages: List[Dict], clear_existing: bool = False) -> None:
+        """Process multiple pages with incremental updates"""
+        logger.info("🚀 Processing %d pages with incremental updates", len(pages))
+        start = time.time()
 
-Answer:"""
+        await self._ensure_collection()
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.google_api_key}",
-                    json={
-                        "contents": [{
-                            "parts": [{"text": prompt}]
-                        }]
-                    },
-                    timeout=30.0
-                )
+        if clear_existing:
+            self.clear_data(silent=True)
+
+        total_upserts = 0
+        for page in pages:
+            try:
+                url = page.get("final_url") or page.get("url") or ""
+                content = page.get("text") or page.get("content") or ""
+                title = page.get("title") or ""
                 
-                if response.status_code == 200:
-                    result = response.json()
-                    answer = result['candidates'][0]['content']['parts'][0]['text']
-                    
-                    # Calculate average confidence
-                    avg_confidence = sum(r['relevance_score'] for r in context_results) / len(context_results)
-                    
-                    return {
-                        "answer": answer,
-                        "sources": sources,
-                        "confidence": avg_confidence
-                    }
-                else:
-                    logger.error(f"Gemini API error: {response.status_code} - {response.text}")
-                    return {
-                        "answer": f"I found relevant information in your knowledge base, but I'm having trouble generating a response right now. Here's what I found: {context_results[0]['text'][:500]}...",
-                        "sources": sources,
-                        "confidence": context_results[0]['relevance_score']
-                    }
-                    
-        except Exception as e:
-            logger.error(f"Error calling Gemini API: {e}")
-            return {
-                "answer": f"I found relevant information about your question, but I'm having trouble generating a response right now. Here's what I found in your knowledge base: {context_results[0]['text'][:500]}..." if context_results else "I'm having trouble processing your question right now.",
-                "sources": sources,
-                "confidence": context_results[0]['relevance_score'] if context_results else 0.0
-            }
-    
-    def _create_chunks(self, page: Dict) -> List[Dict]:
-        """Create chunks from page content"""
-        try:
-            content = page.get('content', '')
-            if not content:
-                return []
-            
-            chunks = []
-            sentences = content.split('. ')
-            
-            current_chunk = ""
-            max_chunk_size = 500  # characters
-            
-            for sentence in sentences:
-                if len(current_chunk) + len(sentence) + 2 <= max_chunk_size:
-                    current_chunk += sentence + ". "
-                else:
-                    if current_chunk.strip():
-                        chunks.append({
-                            'text': current_chunk.strip(),
-                            'metadata': {
-                                'source_url': page.get('url', ''),
-                                'title': page.get('title', ''),
-                                'chunk_index': len(chunks),
-                                'scraped_at': page.get('scraped_at', '')
-                            }
-                        })
-                    current_chunk = sentence + ". "
-            
-            # Add final chunk
-            if current_chunk.strip():
-                chunks.append({
-                    'text': current_chunk.strip(),
-                    'metadata': {
-                        'source_url': page.get('url', ''),
-                        'title': page.get('title', ''),
-                        'chunk_index': len(chunks),
-                        'scraped_at': page.get('scraped_at', '')
-                    }
-                })
-            
-            return chunks
-            
-        except Exception as e:
-            logger.error(f"Error creating chunks: {e}")
-            return []
-    
-    def _generate_embeddings_fast(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings with speed optimizations"""
-        logger.info(f"   🔄 Processing {len(texts)} texts in batches of {self.batch_size}")
+                if not url or not content.strip():
+                    continue
+
+                extra_meta = {
+                    "url": url,
+                    "title": title,
+                    "source_type": "web",
+                    "framework": page.get("framework", "unknown"),
+                    "word_count": page.get("word_count", 0),
+                    "scraped_at": page.get("scraped_at", _now_iso()),
+                }
+
+                upserts = await self._process_single_source(content, url, extra_meta)
+                total_upserts += upserts
+
+            except Exception as e:
+                logger.error("Error processing page %s: %s", page.get("url", ""), e)
+
+        self.ready = True
+        self.last_updated = _now_iso()
         
-        all_embeddings = []
-        
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i:i + self.batch_size]
-            
-            batch_embeddings = self.model.encode(
-                batch,
-                batch_size=self.batch_size,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=True
-            )
-            
-            all_embeddings.extend(batch_embeddings.tolist())
-            
-            if (i + self.batch_size) % 100 == 0:
-                logger.info(f"   ⚡ Processed {min(i + self.batch_size, len(texts))}/{len(texts)} texts")
-        
-        return all_embeddings
-    
-    def is_ready(self) -> bool:
-        """Check if vector store is ready for queries"""
-        if not self.ready:
-            self._load_from_cache_or_s3()
-        return self.ready and len(self.chunks) > 0
-    
-    def get_total_chunks(self) -> int:
-        """Get total number of chunks in vector store"""
-        return len(self.chunks)
-    
-    def clear_data(self):
-        """Clear all data from this vector store"""
-        try:
-            # Clear memory
-            self.chunks = []
-            self.embeddings = None
-            self.index = None
-            self.ready = False
-            self.last_updated = None
-            
-            # Clear cache
-            self.invalidate_cache()
-            
-            # Optionally clear S3 (commented out for safety)
-            # self._delete_from_s3()
-            
-            logger.info(f"🗑️ Cleared all data for {self.user_id}/{self.knowledge_base_id}")
-            
-        except Exception as e:
-            logger.error(f"Error clearing data: {e}")
+        logger.info("✅ Processed %d pages, %d chunks upserted in %.2fs", 
+                   len(pages), total_upserts, time.time() - start)
 
     async def process_document(self, document_data: dict) -> int:
-        """Process a single document and add it to the vector store"""
+        """Process single document with incremental updates"""
         try:
-            text_content = document_data.get('text', '')
-            metadata = document_data.get('metadata', {})
-
+            await self._ensure_collection()
+            
+            text_content = document_data.get("text", "")
+            metadata = document_data.get("metadata", {})
+            
             if not text_content.strip():
                 return 0
 
-            # Load model if not already loaded
-            self._load_model()
-
-            # Create a page-like structure for the _create_chunks method
-            page_structure = {
-                'content': text_content,
-                'url': metadata.get('source_url', 'uploaded_file'),
-                'title': metadata.get('title', 'Uploaded Document'),
-                'scraped_at': metadata.get('uploaded_at', datetime.now().isoformat())
+            source_id = metadata.get("source_url") or metadata.get("doc_id") or f"doc_{uuid.uuid4()}"
+            
+            extra_meta = {
+                "source_type": "document",
+                "title": metadata.get("title", "Uploaded Document"),
+                "file_type": metadata.get("file_type", ""),
+                **metadata
             }
 
-            # Use existing _create_chunks method
-            chunks = self._create_chunks(page_structure)
-
-            if not chunks:
-                return 0
-
-            # Generate embeddings for the new chunks
-            texts = [chunk['text'] for chunk in chunks]
-            new_embeddings = self._generate_embeddings_fast(texts)
-
-            if not new_embeddings:
-                return 0
-
-            # Add to existing data
-            self.chunks.extend(chunks)
-
-            # Handle embeddings
-            if self.embeddings is None:
-                self.embeddings = new_embeddings
-            else:
-                self.embeddings.extend(new_embeddings)
-
-            # Rebuild FAISS index with all embeddings
-            embeddings_array = np.array(self.embeddings).astype('float32')
-
-            # Create new index
-            self.index = faiss.IndexFlatIP(self.dimension)  # Inner Product for cosine similarity
-
-            # Normalize embeddings for cosine similarity
-            faiss.normalize_L2(embeddings_array)
-            self.index.add(embeddings_array)
-
-            # Update metadata
+            upserts = await self._process_single_source(text_content, source_id, extra_meta)
+            
             self.ready = True
-            self.last_updated = datetime.now().isoformat()
+            self.last_updated = _now_iso()
 
-            # 🚀 Save to Memcache + S3
-            self._save_to_cache_and_s3()
-
-            logger.info(f"Added {len(chunks)} chunks from document: {metadata.get('title', 'Unknown')}")
-
-            return len(chunks)
+            logger.info("Added %d chunks from document: %s", upserts, extra_meta.get("title"))
+            return upserts
 
         except Exception as e:
-            logger.error(f"Error processing document: {e}")
+            logger.error("Error processing document: %s", e)
             return 0
 
-# Alias for backward compatibility
+    async def add_document(self, document_data: Dict) -> int:
+        """Backward compatibility"""
+        return await self.process_document(document_data)
+
+    async def semantic_search(self, query: str, max_results: int = _DEF_SEARCH_LIMIT) -> List[Dict]:
+        """Semantic search with tenant filtering"""
+        if not self.is_ready():
+            return []
+        
+        try:
+            qvec = await self._embed_text(query)
+            if not qvec:
+                return []
+
+            results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=qvec,
+                limit=max_results,
+                query_filter=self._tenant_filter(),
+                with_payload=True,
+            )
+
+            output = []
+            for r in results:
+                payload = r.payload or {}
+                output.append({
+                    "text": payload.get("text", ""),
+                    "metadata": {
+                        "source_url": payload.get("url", ""),
+                        "title": payload.get("title", ""),
+                        "chunk_index": payload.get("chunk_index", -1),
+                        "scraped_at": payload.get("scraped_at", ""),
+                    },
+                    "score": float(getattr(r, "score", 0.0) or 0.0),
+                })
+            return output
+
+        except Exception as e:
+            logger.error("Search error: %s", e)
+            return []
+
+    async def process_query(self, question: str, max_results: int = _DEF_SEARCH_LIMIT) -> Dict:
+        """Process query with search and answer generation"""
+        if not self.is_ready():
+            return {
+                "answer": "Knowledge base is not ready. Please process some content first.",
+                "sources": [],
+                "confidence": 0.0,
+            }
+
+        try:
+            chunks = await self.semantic_search(question, max_results)
+            if not chunks:
+                return {
+                    "answer": "I couldn't find relevant information to answer your question.",
+                    "sources": [],
+                    "confidence": 0.0
+                }
+
+            context = "\n\n".join([c["text"] for c in chunks])
+            sources = [c["metadata"] for c in chunks]
+            answer = await self._generate_answer_google(question, context)
+            
+            # Simple confidence from top score
+            confidence = chunks[0]["score"] if chunks else 0.0
+            
+            return {"answer": answer, "sources": sources, "confidence": confidence}
+
+        except Exception as e:
+            logger.error("Query processing error: %s", e)
+            return {
+                "answer": "Sorry, I encountered an error processing your question.",
+                "sources": [],
+                "confidence": 0.0
+            }
+
+    async def _generate_answer_google(self, question: str, context: str) -> str:
+        """Generate answer using Google Gemini"""
+        try:
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            prompt = (
+                "You are a helpful sales assistant. Based on the following information, "
+                "concisely answer the customer's question and focus on how our features can help them.\n\n"
+                f"Information:\n{context}\n\n"
+                f"Customer Question: {question}\n\n"
+                "Answer as a knowledgeable sales assistant. If you don't have the specific information needed, say you'll get back to them."
+            )
+            resp = model.generate_content(prompt)
+            return getattr(resp, "text", None) or "I'll get back to you with that information."
+        except Exception as e:
+            logger.error("Answer generation error: %s", e)
+            return "I'll get back to you with that information."
+
+    def is_ready(self) -> bool:
+        """Check if vector store is ready"""
+        if not self.ready:
+            try:
+                count = self.get_total_chunks()
+                if count > 0:
+                    self.ready = True
+            except Exception:
+                return False
+        return self.ready
+
+    def get_total_chunks(self) -> int:
+        """Get total chunks for this tenant+KB"""
+        try:
+            result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=self._tenant_filter(),
+            )
+            return int(result.count) if hasattr(result, "count") else 0
+        except Exception as e:
+            logger.warning("Count failed: %s", e)
+            return 0
+
+    def clear_data(self, silent: bool = False) -> None:
+        """Delete all data for this tenant+KB"""
+        try:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=self._tenant_filter(),
+                wait=True,
+            )
+            self.ready = False
+            self.last_updated = None
+            if not silent:
+                logger.info("🗑️ Cleared all data for %s/%s", self.user_id, self.knowledge_base_id)
+        except Exception as e:
+            if not silent:
+                logger.error("Error clearing data: %s", e)
+
+# Backward compatibility alias
 SaaSVectorStore = MemcacheS3VectorStore
