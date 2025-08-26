@@ -372,7 +372,7 @@ export default function LandingPage() {
           <nav className="ml-auto flex items-center gap-6">
             <div className="hidden md:flex items-center gap-6">
               <Link
-                href="/blog"
+                href="/blogs"
                 className="text-sm font-medium text-brand-midnight hover:text-brand-dark-cyan transition-colors"
               >
                 Blog
@@ -437,9 +437,9 @@ export default function LandingPage() {
                 </Badge>
 
                 <h1 className="text-4xl font-bold tracking-tight text-brand-black lg:text-6xl font-display leading-tight">
-                  Convert Visitors into{" "}
+                  Answer{" "}
                   <span className="bg-gradient-to-r from-brand-dark-cyan to-brand-cerulean bg-clip-text text-transparent">
-                    Customers
+                    questions 24x7
                   </span>{" "}
                   with AI
                 </h1>

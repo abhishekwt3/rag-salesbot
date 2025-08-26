@@ -60,48 +60,113 @@ export default function Pricing({ onGetStarted, token, currentPlan, currentSubsc
     }
   }
 
-  const handlePlanSelect = async (plan: string) => {
-    if (!token) {
-      if (onGetStarted) {
-        onGetStarted(plan)
-      }
-      return
+// Complete handlePlanSelect function - updated to allow trial conversions:
+const handlePlanSelect = async (plan: string) => {
+  if (!token) {
+    if (onGetStarted) {
+      onGetStarted(plan);
     }
-
-    setLoading(true)
-    setError("")
-
-    try {
-      const response = await fetch(`${API_BASE}/subscription/create`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          plan: plan.toLowerCase(),
-          currency: currency,
-          billing_cycle: 'monthly'
-        })
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        if (data.payment_link) {
-          // Redirect to payment link
-          window.open(data.payment_link, '_blank')
-        }
-      } else {
-        const errorData = await response.json()
-        setError(errorData.detail || 'Failed to create subscription')
-      }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (error) {
-      setError('Network error. Please try again.')
-    } finally {
-      setLoading(false)
-    }
+    return;
   }
+
+  setLoading(true);
+  setError("");
+
+  try {
+    const requestData = {
+      plan: plan.toLowerCase(),
+      currency: currency,
+      billing_cycle: 'monthly'
+    };
+    
+    console.log('🔍 Plan selection data:', requestData);
+    
+    // STEP 1: Check if user has existing subscription
+    console.log('🔍 Step 1: Checking for existing subscription...');
+    
+    const checkResponse = await fetch(`${API_BASE}/subscription/current`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    let endpoint = '/subscription/create';
+    let actionText = 'Creating';
+    
+    if (checkResponse.ok) {
+      const existingSubscription = await checkResponse.json();
+      console.log('✅ Found existing subscription:', existingSubscription.plan, existingSubscription.status);
+      
+      // NEW LOGIC: Allow trial users to convert to paid (even same plan)
+      if (existingSubscription.status === 'trialing') {
+        console.log('🔄 Trial user - allowing conversion to paid subscription');
+        endpoint = '/subscription/upgrade';
+        actionText = existingSubscription.plan === plan.toLowerCase() ? 
+          'Converting trial to paid' : 'Upgrading';
+      } else if (existingSubscription.plan === plan.toLowerCase()) {
+        // Non-trial users can't select same plan
+        setError(`You already have an active ${plan} plan!`);
+        setLoading(false);
+        return;
+      } else {
+        // Different plan upgrade/downgrade
+        endpoint = '/subscription/upgrade';
+        actionText = 'Upgrading';
+      }
+    } else if (checkResponse.status === 404) {
+      console.log('✅ No existing subscription found - will create new one');
+    } else {
+      console.log('⚠️ Error checking subscription, defaulting to create');
+    }
+    
+    // STEP 2: Call the appropriate endpoint
+    console.log(`🔍 Step 2: ${actionText} subscription via ${API_BASE}${endpoint}`);
+    
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(requestData)
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`✅ ${actionText} successful:`, data);
+      
+      if (data.payment_link) {
+        window.open(data.payment_link, '_blank');
+      } else {
+        setError(`✅ ${data.message || `Subscription ${actionText.toLowerCase()} successfully!`}`);
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      }
+    } else {
+      const responseText = await response.text();
+      console.error(`❌ ${actionText} error:`, {
+        status: response.status,
+        statusText: response.statusText,
+        responseText: responseText
+      });
+      
+      let errorData;
+      try {
+        errorData = JSON.parse(responseText);
+      } catch {
+        errorData = { detail: responseText || `HTTP ${response.status} Error` };
+      }
+      
+      setError(errorData.detail || errorData.message || responseText || `Failed to ${actionText.toLowerCase()} subscription`);
+    }
+  } catch (error) {
+    console.error('❌ Network error:', error);
+    setError('Network error. Please try again.');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const getPrice = (plan: Plan) => {
     if (currency === 'USD') {

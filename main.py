@@ -2,7 +2,7 @@
 import os
 import logging
 from typing import List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import tempfile
 import docx
@@ -390,6 +390,7 @@ async def get_usage_details(
         status=subscription.status.value
     )
 
+# REPLACE your create_subscription endpoint with this:
 @app.post("/subscription/create", response_model=SubscriptionCreateResponse)
 async def create_subscription(
     subscription_data: SubscriptionCreateRequest,
@@ -397,11 +398,10 @@ async def create_subscription(
     db: Session = Depends(get_db)
 ):
     """Create a new subscription"""
-    if not razorpay_manager.is_available():
-        raise HTTPException(
-            status_code=501,
-            detail="Payment processing is not available. Please contact support."
-        )
+    
+    logger.info(f"🆕 Creating new subscription")
+    logger.info(f"🆕 Plan: {subscription_data.plan.value}")
+    logger.info(f"🆕 User: {current_user.email}")
     
     # Check if user already has an active subscription
     existing_subscription = db.query(Subscription).filter(
@@ -416,51 +416,34 @@ async def create_subscription(
         )
     
     try:
-        # Create Razorpay customer
-        customer = razorpay_manager.create_customer(
-            email=current_user.email,
-            name=current_user.full_name
-        )
-        
-        if not customer:
-            raise HTTPException(status_code=500, detail="Failed to create customer")
-        
-        # Create Razorpay plan
-        plan = razorpay_manager.create_plan(
-            subscription_data.plan,
-            subscription_data.currency
-        )
-        
-        if not plan:
-            raise HTTPException(status_code=500, detail="Failed to create plan")
-        
         # Get plan details
         plan_details = Subscription.get_plan_details(subscription_data.plan)
+        if not plan_details:
+            raise HTTPException(status_code=400, detail=f"Invalid plan: {subscription_data.plan}")
+        
         amount_key = f"amount_{subscription_data.currency.lower()}"
         amount = plan_details[amount_key]
         
-        # Create payment link for immediate payment
-        payment_link = razorpay_manager.create_payment_link(
-            amount=amount,
-            currency=subscription_data.currency,
-            customer_email=current_user.email,
-            description=f"{plan_details['name']} - Monthly Subscription"
-        )
+        # *** CHANGE: Direct subscription creation without payment for now ***
+        logger.info("🆕 Creating subscription without payment processing")
         
-        # Create subscription in database
         subscription = Subscription(
             user_id=current_user.id,
             plan=subscription_data.plan,
-            status=SubscriptionStatus.PENDING,
-            razorpay_customer_id=customer['id'],
-            razorpay_plan_id=plan['id'],
+            status=SubscriptionStatus.ACTIVE,  # *** CHANGE: Direct to ACTIVE ***
+            razorpay_customer_id=f"temp_customer_{current_user.id}",  # *** CHANGE: Temp ID ***
+            razorpay_plan_id=f"temp_plan_{subscription_data.plan.value}",  # *** CHANGE: Temp ID ***
             amount=amount,
             currency=subscription_data.currency,
             billing_cycle=subscription_data.billing_cycle,
             max_knowledge_bases=plan_details["max_knowledge_bases"],
             max_total_chunks=plan_details["max_total_chunks"],
             current_chunk_usage=0,
-            current_kb_count=0
+            current_kb_count=0,
+            current_period_start=datetime.now(timezone.utc),  # *** CHANGE: Add period dates ***
+            current_period_end=datetime.now(timezone.utc) + timedelta(days=30),  # *** CHANGE: Add period dates ***
+            trial_start=None,  # *** CHANGE: No trial for direct creation ***
+            trial_end=None
         )
         
         db.add(subscription)
@@ -471,16 +454,123 @@ async def create_subscription(
         
         return SubscriptionCreateResponse(
             subscription_id=subscription.id,
-            razorpay_subscription_id=subscription.razorpay_subscription_id,
-            payment_link=payment_link.get('short_url') if payment_link else None,
-            trial_end=subscription.trial_end,
+            razorpay_subscription_id=f"temp_sub_{subscription.id}",  # *** CHANGE: Temp ID ***
+            payment_link=None,  # *** CHANGE: No payment link ***
+            trial_end=None,
             status=subscription.status.value,
-            message="Subscription created successfully. Please complete payment to activate."
+            message=f"Successfully created {plan_details['name']} subscription!"  # *** CHANGE: Updated message ***
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error creating subscription: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Failed to create subscription")
+
+# REPLACE your upgrade_subscription endpoint with this:
+@app.post("/subscription/upgrade", response_model=SubscriptionCreateResponse)
+async def upgrade_subscription(
+    subscription_data: SubscriptionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upgrade or change subscription plan"""
+    
+    logger.info(f"🔄 Upgrading subscription")
+    logger.info(f"🔄 New plan: {subscription_data.plan.value}")
+    logger.info(f"🔄 User: {current_user.email}")
+    
+    # Get existing subscription
+    existing_subscription = db.query(Subscription).filter(
+        Subscription.user_id == current_user.id
+    ).order_by(Subscription.created_at.desc()).first()
+    
+    if existing_subscription:
+        logger.info(f"🔄 Current plan: {existing_subscription.plan.value} - {existing_subscription.status.value}")
+        
+        # *** CHANGE: Allow trial users to convert to paid (even same plan) ***
+        if existing_subscription.status == SubscriptionStatus.TRIALING:
+            logger.info("🔄 Trial user converting to paid subscription")
+            action_type = "trial_to_paid"
+        elif existing_subscription.plan == subscription_data.plan:
+            # Non-trial users can't select same plan
+            raise HTTPException(
+                status_code=400, 
+                detail=f"You already have an active {subscription_data.plan.value} plan"
+            )
+        else:
+            action_type = "plan_change"
+    else:
+        action_type = "new_subscription"
+    
+    try:
+        # Get plan details
+        plan_details = Subscription.get_plan_details(subscription_data.plan)
+        if not plan_details:
+            raise HTTPException(status_code=400, detail=f"Invalid plan: {subscription_data.plan}")
+        
+        amount_key = f"amount_{subscription_data.currency.lower()}"
+        amount = plan_details[amount_key]
+        
+        # *** CHANGE: Direct subscription upgrade without payment for now ***
+        logger.info(f"🔄 Processing {action_type}")
+        
+        if existing_subscription:
+            # Cancel old subscription
+            existing_subscription.status = SubscriptionStatus.CANCELED
+            existing_subscription.canceled_at = datetime.now(timezone.utc)
+        
+        # Create new ACTIVE subscription
+        new_subscription = Subscription(
+            user_id=current_user.id,
+            plan=subscription_data.plan,
+            status=SubscriptionStatus.ACTIVE,  # *** CHANGE: Direct to ACTIVE ***
+            razorpay_customer_id=f"temp_customer_{current_user.id}",  # *** CHANGE: Temp ID ***
+            razorpay_plan_id=f"temp_plan_{subscription_data.plan.value}",  # *** CHANGE: Temp ID ***
+            amount=amount,
+            currency=subscription_data.currency,
+            billing_cycle=subscription_data.billing_cycle,
+            max_knowledge_bases=plan_details["max_knowledge_bases"],
+            max_total_chunks=plan_details["max_total_chunks"],
+            current_chunk_usage=existing_subscription.current_chunk_usage if existing_subscription else 0,
+            current_kb_count=existing_subscription.current_kb_count if existing_subscription else 0,
+            current_period_start=datetime.now(timezone.utc),
+            current_period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            trial_start=None,  # *** CHANGE: Clear trial dates ***
+            trial_end=None
+        )
+        
+        db.add(new_subscription)
+        db.commit()
+        db.refresh(new_subscription)
+        
+        # Generate success message
+        if action_type == "trial_to_paid":
+            message = f"Successfully converted trial to paid {plan_details['name']} plan!"
+        else:
+            old_plan = existing_subscription.plan.value if existing_subscription else 'None'
+            message = f"Successfully upgraded from {old_plan} to {plan_details['name']} plan!"
+            
+        logger.info(f"✅ {message}")
+        
+        return SubscriptionCreateResponse(
+            subscription_id=new_subscription.id,
+            razorpay_subscription_id=f"temp_sub_{new_subscription.id}",  # *** CHANGE: Temp ID ***
+            payment_link=None,  # *** CHANGE: No payment link for now ***
+            trial_end=None,
+            status=new_subscription.status.value,
+            message=message
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error upgrading subscription: {e}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to upgrade subscription: {str(e)}")
 
 @app.post("/subscription/payment/verify", response_model=PaymentResponse)
 async def verify_payment(
@@ -740,7 +830,6 @@ async def process_website_with_limits(
         knowledge_base_id=knowledge_base_id,
         status="processing"
     )
-
 
 async def process_website_background_with_limits(user_id: str, knowledge_base_id: str, config: WebsiteConfig):
     """Enhanced background task with subscription limit enforcement - FIXED"""

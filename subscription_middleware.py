@@ -3,7 +3,7 @@ from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 from models import User, KnowledgeBase, get_db, Subscription, SubscriptionPlan, SubscriptionStatus
 from auth import get_current_user  # ADDED MISSING IMPORT
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class SubscriptionManager:
         if not subscription:
             # Create a 7-day trial subscription with Basic plan
             trial_end = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59, microsecond=999999)
-            trial_end = trial_end.replace(day=trial_end.day + 7)  # 7-day trial
+            trial_end = datetime.now(timezone.utc) + timedelta(days=3)  # 3-day trial
             
             plan_details = Subscription.get_plan_details(SubscriptionPlan.BASIC)
             

@@ -120,6 +120,29 @@
   }
 }
 
+.pricing-modal-override {
+  width: 95vw !important;
+  max-width: 1200px !important;
+  min-width: 800px !important;
+}
+
+@media (max-width: 1280px) {
+  .pricing-modal-override {
+    width: 90vw !important;
+    max-width: 1000px !important;
+    min-width: 600px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .pricing-modal-override {
+    width: 95vw !important;
+    max-width: none !important;
+    min-width: 300px !important;
+  }
+}
+
+
 /* Component Styles */
 @layer components {
   /* Typography */

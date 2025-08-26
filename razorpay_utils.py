@@ -25,8 +25,8 @@ class RazorpayManager:
     def is_available(self) -> bool:
         """Check if Razorpay is properly configured"""
         return self.client is not None
-    
-    def create_plan(self, plan_type: SubscriptionPlan, currency: str = "INR") -> Optional[Dict]:
+
+    def create_plan(self, plan_type: SubscriptionPlan, currency: str) -> Optional[Dict]:
         """Create a Razorpay plan"""
         if not self.is_available():
             return None

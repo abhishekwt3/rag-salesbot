@@ -473,24 +473,35 @@ export default function Dashboard({ user, knowledgeBases, onLogout, token, onRef
 
       {/* Upgrade Modal */}
       <Dialog open={showUpgradeModal} onOpenChange={setShowUpgradeModal}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Upgrade Your Plan</DialogTitle>
-            <DialogDescription>
-              Choose a plan that fits your needs and unlock more features.
-            </DialogDescription>
-          </DialogHeader>
-          <Pricing 
-            token={token}
-            currentPlan={subscription?.plan}
-            currentSubscription={subscription}
-            onGetStarted={() => {
-              setShowUpgradeModal(false)
-              // Handle plan selection
-            }}
-          />
-        </DialogContent>
-      </Dialog>
+  <DialogContent 
+    className="pricing-modal-override max-h-[95vh] overflow-y-auto p-0"
+    style={{
+      width: '95vw',
+      maxWidth: '1200px',
+      minWidth: '800px'
+    }}
+  >
+    <div className="p-6">
+      <DialogHeader>
+        <DialogTitle className="text-2xl font-bold">Upgrade Your Plan</DialogTitle>
+        <DialogDescription className="text-lg">
+          Choose a plan that fits your needs and unlock more features.
+        </DialogDescription>
+      </DialogHeader>
+    </div>
+    <div className="px-6 pb-6">
+      <Pricing 
+        token={token}
+        currentPlan={subscription?.plan}
+        currentSubscription={subscription}
+        onGetStarted={() => {
+          setShowUpgradeModal(false)
+          // Handle plan selection
+        }}
+      />
+    </div>
+  </DialogContent>
+</Dialog>
     </div>
   )
 }
