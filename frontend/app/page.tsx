@@ -560,6 +560,14 @@ export default function LandingPage() {
         strategy="lazyOnload" // Or "afterInteractive", "beforeInteractive"
       />
 
+      {/* Voice Widget Script */}
+      <Script
+      id="salesdok-voice-widget"
+      src="https://salesdok-voice.vercel.app/widget.js"
+      strategy="lazyOnload"
+      data-widget-id="wgt_8e6d309d374c422b"
+      />
+
       {/* Footer */}
       <footer className="border-t border-brand-timberwolf/20 bg-white py-12">
         <div className="container px-4 lg:px-6">
