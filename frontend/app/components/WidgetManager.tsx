@@ -79,6 +79,7 @@ export default function WidgetManager({ knowledgeBases, token, onRefresh }: Widg
     show_branding: true
   })
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     fetchWidgets()
   }, [token])

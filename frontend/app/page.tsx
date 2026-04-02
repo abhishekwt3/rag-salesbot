@@ -19,9 +19,6 @@ import {
   Sparkles,
   Loader2,
   AlertCircle,
-  Zap,
-  Users,
-  TrendingUp,
 } from "lucide-react"
 import { FaGoogle } from "react-icons/fa"
 import Link from "next/link"
@@ -94,6 +91,7 @@ export default function LandingPage() {
   // (makeAuthenticatedRequest removed because it was unused)
 
   // Check for existing token on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const savedToken = localStorage.getItem("token")
     if (savedToken) {
@@ -152,6 +150,7 @@ export default function LandingPage() {
     }
 
     handleOAuthCallback()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fetch user info with enhanced error handling
