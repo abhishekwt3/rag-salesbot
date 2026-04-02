@@ -565,8 +565,9 @@ export default function LandingPage() {
       id="salesdok-voice-widget"
       src="https://salesdok-voice.vercel.app/widget.js"
       strategy="lazyOnload"
-      data-widget-id="wgt_8e6d309d374c422b"
+      data-widget-id="wgt_6befccd4271543b1"
       />
+
 
       {/* Footer */}
       <footer className="border-t border-brand-timberwolf/20 bg-white py-12">
